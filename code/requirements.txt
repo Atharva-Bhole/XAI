@@ -1,0 +1,43 @@
+# ---- Build tools (required for Python 3.13) ----
+setuptools>=70.0.0
+
+# ---- Flask core ----
+flask==3.1.0
+flask-sqlalchemy==3.1.1
+flask-cors==4.0.1
+
+# ---- ML / AI ----
+torch
+transformers>=4.41.2,<5.0.0
+# LIME for Explainable AI
+lime==0.2.0.1
+# Language detection
+langdetect==1.0.9
+# Translation
+deep_translator==1.11.4
+# Image processing
+Pillow>=11.0.0
+opencv-python-headless>=4.10.0.84
+# Whisper speech-to-text
+openai-whisper
+# SpeechRecognition fallback
+SpeechRecognition==3.10.4
+
+# ---- Database ----
+SQLAlchemy>=2.0.37
+# Uncomment for MySQL:
+# PyMySQL==1.1.1
+# Uncomment for PostgreSQL:
+# psycopg2-binary==2.9.9
+
+# ---- PDF generation ----
+fpdf2==2.7.9
+
+# ---- Web scraping (social media URL input) ----
+requests==2.32.3
+beautifulsoup4==4.12.3
+
+# ---- General utilities ----
+python-dotenv==1.0.1
+werkzeug>=3.0.3
+numpy>=2.0.0
