@@ -13,6 +13,7 @@ class Analysis(db.Model):
     raw_input = db.Column(db.Text)                          # original text / file path / URL
     detected_language = db.Column(db.String(50))
     translated_text = db.Column(db.Text)
+    transcript = db.Column(db.Text)                         # audio/video transcript when available
 
     # Sentiment output
     sentiment = db.Column(db.String(20))                    # Positive | Negative | Neutral
@@ -37,6 +38,7 @@ class Analysis(db.Model):
             "raw_input": self.raw_input,
             "detected_language": self.detected_language,
             "translated_text": self.translated_text,
+            "transcript": self.transcript,
             "sentiment": self.sentiment,
             "scores": {
                 "positive": round(self.positive_score, 4),

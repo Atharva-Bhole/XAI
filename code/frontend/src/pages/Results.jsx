@@ -54,6 +54,8 @@ export default function Results() {
   const scores = data.scores ?? {}
   const emotionScores = data.emotion_scores ?? {}
   const xai = data.xai ?? {}
+  const transcriptText = (data.transcript ?? '').trim()
+  const transcriptDisplay = transcriptText || data.explanation || 'Transcript could not be generated for this file.'
   const displayScores = Object.keys(emotionScores).length > 0
     ? emotionScores
     : { positive: scores.positive ?? 0, negative: scores.negative ?? 0, neutral: scores.neutral ?? 0 }
@@ -145,10 +147,10 @@ export default function Results() {
       <XAIExplainer xai={xai} keyWords={data.key_words ?? []} />
 
       {/* Audio transcript */}
-      {data.transcript && (
+      {(data.input_type === 'audio' || data.input_type === 'video' || transcriptText) && (
         <div className="result-card">
           <h3>Audio Transcript</h3>
-          <p className="transcript-text">{data.transcript}</p>
+          <p className="transcript-text">{transcriptDisplay}</p>
         </div>
       )}
 

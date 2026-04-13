@@ -48,7 +48,7 @@ def _save_upload(file, allowed_extensions: set) -> str:
 
 
 def _persist_analysis(user_id, input_type, raw_input, lang_code, translated,
-                       result_dict, xai_dict, report_path=None) -> Analysis:
+                       result_dict, xai_dict, report_path=None, transcript: str = "") -> Analysis:
     """Save an Analysis record and return it."""
     scores = result_dict.get("scores", {})
     keywords = extract_key_words(xai_dict) if xai_dict else result_dict.get("key_words", [])
@@ -58,6 +58,7 @@ def _persist_analysis(user_id, input_type, raw_input, lang_code, translated,
         raw_input=str(raw_input)[:2000],
         detected_language=language_display_name(lang_code) if lang_code else result_dict.get("detected_language", ""),
         translated_text=translated[:2000] if translated else "",
+        transcript=transcript[:5000] if transcript else "",
         sentiment=result_dict["sentiment"],
         positive_score=scores.get("positive", 0),
         negative_score=scores.get("negative", 0),
@@ -189,7 +190,7 @@ def analyze_audio():
 
     rec = _persist_analysis(
         session["user_id"], "video" if is_video else "audio",
-        result.get("transcript", ""), lang_code, translated, result, xai
+        file_path, lang_code, translated, result, xai, transcript=result.get("transcript", "")
     )
     response = rec.to_dict()
     response["transcript"] = result.get("transcript", "")

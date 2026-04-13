@@ -22,6 +22,7 @@ from ml.image_analyzer import analyze_image_sentiment
 
 logger = logging.getLogger(__name__)
 _WHISPER_MODEL = None
+FFMPEG_TIMEOUT_SECONDS = int(os.environ.get("FFMPEG_TIMEOUT_SECONDS", "900"))
 
 
 # ---- Audio extraction from video -------------------------------------------
@@ -59,7 +60,7 @@ def _run_ffmpeg(input_path: str, output_path: str, audio_only: bool = False) -> 
     cmd.append(output_path)
 
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=180, check=False)
+        result = subprocess.run(cmd, capture_output=True, timeout=FFMPEG_TIMEOUT_SECONDS, check=False)
         if result.returncode == 0:
             return True, ""
         stderr_text = result.stderr.decode(errors="replace")
@@ -99,7 +100,7 @@ def _convert_audio_to_wav(audio_path: str) -> str:
     tmp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
     tmp_wav.close()
 
-    ok, _error_detail = _run_ffmpeg(audio_path, tmp_wav.name, audio_only=False)
+    ok, _error_detail = _run_ffmpeg(audio_path, tmp_wav.name, audio_only=True)
     if ok:
         return tmp_wav.name
 
@@ -287,6 +288,7 @@ def preload_audio_models(allow_download: bool = True) -> bool:
 def _transcribe_whisper(audio_path: str) -> str:
     """Transcribe using openai-whisper."""
     try:
+        _resolve_ffmpeg_executable()
         model = _get_whisper_model(allow_download=True)
         if model is None:
             return ""
@@ -305,6 +307,9 @@ def _transcribe_sr(audio_path: str) -> str:
         with sr.AudioFile(audio_path) as source:
             audio_data = recognizer.record(source)
         return recognizer.recognize_google(audio_data)
+    except ModuleNotFoundError as exc:
+        logger.warning("SpeechRecognition fallback is unavailable on this Python version: %s", exc)
+        return ""
     except Exception as exc:
         logger.warning("SpeechRecognition failed: %s", exc)
         return ""
@@ -312,10 +317,81 @@ def _transcribe_sr(audio_path: str) -> str:
 
 def transcribe(audio_path: str) -> str:
     """Try Whisper first, fall back to SpeechRecognition."""
+    _resolve_ffmpeg_executable()
     text = _transcribe_whisper(audio_path)
     if not text:
         text = _transcribe_sr(audio_path)
+    if not text and not audio_path.lower().endswith(".wav"):
+        normalized = _convert_audio_to_wav(audio_path)
+        if normalized:
+            try:
+                text = _transcribe_whisper(normalized) or _transcribe_sr(normalized)
+            finally:
+                try:
+                    os.unlink(normalized)
+                except OSError:
+                    pass
+    if not text:
+        text = _transcribe_in_chunks(audio_path)
     return text
+
+
+def _transcribe_in_chunks(audio_path: str, chunk_seconds: int = 600) -> str:
+    """Transcribe long media by splitting into smaller WAV chunks first."""
+    ffmpeg_exe = _resolve_ffmpeg_executable()
+    if not ffmpeg_exe:
+        return ""
+
+    chunk_dir = tempfile.mkdtemp(prefix="xsense_chunks_")
+    chunk_pattern = os.path.join(chunk_dir, "chunk_%03d.wav")
+    cmd = [
+        ffmpeg_exe,
+        "-y",
+        "-i",
+        audio_path,
+        "-vn",
+        "-acodec",
+        "pcm_s16le",
+        "-ar",
+        "16000",
+        "-ac",
+        "1",
+        "-f",
+        "segment",
+        "-segment_time",
+        str(chunk_seconds),
+        "-reset_timestamps",
+        "1",
+        chunk_pattern,
+    ]
+
+    texts = []
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=FFMPEG_TIMEOUT_SECONDS, check=False)
+        if result.returncode != 0:
+            logger.warning("Chunked ffmpeg transcription prep failed: %s", result.stderr.decode(errors="replace"))
+            return ""
+
+        chunk_files = sorted(
+            os.path.join(chunk_dir, name)
+            for name in os.listdir(chunk_dir)
+            if name.lower().endswith(".wav")
+        )
+        for chunk_file in chunk_files:
+            chunk_text = _transcribe_whisper(chunk_file) or _transcribe_sr(chunk_file)
+            if chunk_text:
+                texts.append(chunk_text)
+        return " ".join(texts).strip()
+    finally:
+        for name in os.listdir(chunk_dir):
+            try:
+                os.unlink(os.path.join(chunk_dir, name))
+            except OSError:
+                pass
+        try:
+            os.rmdir(chunk_dir)
+        except OSError:
+            pass
 
 
 # ---- Public API -------------------------------------------------------------
@@ -385,7 +461,7 @@ def analyze_audio_sentiment(file_path: str, is_video: bool = False) -> Dict:
         xai = generate_text_explanation(translated)
         keywords = extract_key_words(xai)
     else:
-        xai = {"method": "audio_transcript", "summary": "No transcript available.", "word_weights": []}
+        xai = {"method": "audio_transcript", "summary": "Transcript could not be generated for this file.", "word_weights": []}
         keywords = []
 
     fused = _fuse_modal_scores(

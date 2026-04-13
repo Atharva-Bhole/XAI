@@ -29,7 +29,8 @@ class Config:
 
     # File uploads
     UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
-    MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50 MB
+    # Audio/video inputs can be substantially larger than images, so keep a higher cap.
+    MAX_CONTENT_LENGTH = 500 * 1024 * 1024  # 500 MB
     ALLOWED_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
     ALLOWED_AUDIO_EXTENSIONS = {"mp3", "wav", "ogg", "flac"}
     ALLOWED_VIDEO_EXTENSIONS = {"mp4", "avi", "mov", "mkv", "webm"}

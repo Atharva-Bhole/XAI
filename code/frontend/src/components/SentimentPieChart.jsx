@@ -21,14 +21,30 @@ const COLOR_MAP = {
   Neutral: ['#6b7280', '#4b5563'],
 }
 
+const FALLBACK_COLORS = [
+  ['#0ea5e9', '#0284c7'],
+  ['#16a34a', '#15803d'],
+  ['#f59e0b', '#d97706'],
+  ['#8b5cf6', '#7c3aed'],
+  ['#ec4899', '#db2777'],
+  ['#14b8a6', '#0f766e'],
+  ['#ef4444', '#dc2626'],
+]
+
+function getSliceColors(label, index) {
+  const normalized = String(label ?? '').trim().toLowerCase()
+  const canonical = normalized.charAt(0).toUpperCase() + normalized.slice(1)
+  return COLOR_MAP[label] || COLOR_MAP[canonical] || FALLBACK_COLORS[index % FALLBACK_COLORS.length]
+}
+
 export default function SentimentPieChart({ dataMap = {} }) {
   const labels = Object.keys(dataMap)
   const rawValues = labels.map(label => Number(dataMap[label] ?? 0))
   const maxValue = rawValues.length ? Math.max(...rawValues) : 0
   const isRatio = maxValue <= 1
   const values = rawValues.map(v => (isRatio ? Math.round(v * 100) : Math.round(v)))
-  const bg = labels.map(label => (COLOR_MAP[label] ?? ['#475569', '#334155'])[0])
-  const border = labels.map(label => (COLOR_MAP[label] ?? ['#475569', '#334155'])[1])
+  const bg = labels.map((label, index) => getSliceColors(label, index)[0])
+  const border = labels.map((label, index) => getSliceColors(label, index)[1])
 
   const data = {
     labels,

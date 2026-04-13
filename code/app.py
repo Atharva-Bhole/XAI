@@ -3,6 +3,7 @@ import logging
 from flask import Flask, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
+from sqlalchemy import inspect, text
 
 # Load environment variables from code/.env for local development.
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
@@ -89,6 +90,7 @@ def create_app(env: str = "default") -> Flask:
     with app.app_context():
         from models import user, analysis  # noqa: F401 – ensure models are registered
         db.create_all()
+        _ensure_analysis_transcript_column(app)
 
     # Register blueprints
     app.register_blueprint(auth_bp)
@@ -108,13 +110,30 @@ def create_app(env: str = "default") -> Flask:
 
     @app.errorhandler(413)
     def too_large(_e):
-        return jsonify({"error": "File too large. Max upload size is 50 MB."}), 413
+        return jsonify({"error": "File too large. Max upload size is 500 MB."}), 413
 
     @app.errorhandler(500)
     def server_error(_e):
         return jsonify({"error": "Internal server error."}), 500
 
     return app
+
+
+def _ensure_analysis_transcript_column(app: Flask) -> None:
+    """Backfill the transcript column for existing installs without a migration tool."""
+    try:
+        inspector = inspect(db.engine)
+        columns = {column["name"] for column in inspector.get_columns("analyses")}
+        if "transcript" in columns:
+            return
+
+        dialect = db.engine.dialect.name.lower()
+        if dialect == "sqlite":
+            db.session.execute(text("ALTER TABLE analyses ADD COLUMN transcript TEXT"))
+            db.session.commit()
+            app.logger.info("Added transcript column to analyses table.")
+    except Exception as exc:
+        app.logger.warning("Could not ensure transcript column exists: %s", exc)
 
 
 if __name__ == "__main__":

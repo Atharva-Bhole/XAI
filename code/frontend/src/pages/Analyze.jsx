@@ -126,7 +126,7 @@ export default function Analyze() {
                 <>
                   <Upload size={36} className="dropzone-icon" />
                   <p>Click to select or drag & drop</p>
-                  <span className="dropzone-hint">PNG, JPG, GIF, WEBP (max 50 MB)</span>
+                  <span className="dropzone-hint">PNG, JPG, GIF, WEBP (max 500 MB)</span>
                 </>
               )}
             </div>
@@ -176,7 +176,7 @@ export default function Analyze() {
             >
               <Mic size={36} className="dropzone-icon" />
               <p>{audioFile ? audioFile.name : 'Click to select a file'}</p>
-              <span className="dropzone-hint">MP3, WAV, MP4, AVI, MOV, MKV (max 50 MB)</span>
+              <span className="dropzone-hint">MP3, WAV, MP4, AVI, MOV, MKV (max 500 MB)</span>
             </div>
             <input
               type="file"
