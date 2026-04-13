@@ -13,15 +13,25 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    api.get('/dashboard/stats')
-      .then(r => setStats(r.data))
-      .catch(console.error)
-      .finally(() => setLoading(false))
+    let cancelled = false
+    const loadStats = async () => {
+      try {
+        const r = await api.get('/dashboard/stats')
+        if (!cancelled) setStats(r.data)
+      } catch (_err) {
+        if (!cancelled) setStats(null)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    loadStats()
+    return () => { cancelled = true }
   }, [])
 
   if (loading) return <div className="loading-screen"><div className="spinner" /></div>
 
-  const dist = stats?.sentiment_distribution ?? { positive: 0, negative: 0, neutral: 0 }
+  const dist = stats?.sentiment_distribution ?? {}
+  const polarity = stats?.polarity_distribution ?? { positive: 0, negative: 0, neutral: 0 }
   const typeDist = stats?.input_type_distribution ?? {}
 
   return (
@@ -70,13 +80,16 @@ export default function Dashboard() {
       {/* Charts row */}
       <div className="charts-row">
         <div className="chart-card">
-          <h3>Sentiment Distribution</h3>
-          <SentimentPieChart
-            positive={dist.positive}
-            negative={dist.negative}
-            neutral={dist.neutral}
-          />
+          <h3>Emotion Distribution</h3>
+          <SentimentPieChart dataMap={dist} />
         </div>
+        <div className="chart-card">
+          <h3>Polarity Mix</h3>
+          <SentimentPieChart dataMap={{ Positive: polarity.positive, Negative: polarity.negative, Neutral: polarity.neutral }} />
+        </div>
+      </div>
+
+      <div className="charts-row">
         <div className="chart-card">
           <h3>Analysis by Input Type</h3>
           <SentimentBarChart data={typeDist} />

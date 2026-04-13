@@ -8,18 +8,35 @@ import {
 
 ChartJS.register(ArcElement, Tooltip, Legend)
 
-export default function SentimentPieChart({ positive = 0, negative = 0, neutral = 0 }) {
+const COLOR_MAP = {
+  Happy: ['#16a34a', '#15803d'],
+  Sad: ['#2563eb', '#1d4ed8'],
+  Angry: ['#dc2626', '#b91c1c'],
+  Calm: ['#6b7280', '#4b5563'],
+  Fear: ['#7c3aed', '#6d28d9'],
+  Surprised: ['#f59e0b', '#d97706'],
+  Disgust: ['#059669', '#047857'],
+  Positive: ['#16a34a', '#15803d'],
+  Negative: ['#dc2626', '#b91c1c'],
+  Neutral: ['#6b7280', '#4b5563'],
+}
+
+export default function SentimentPieChart({ dataMap = {} }) {
+  const labels = Object.keys(dataMap)
+  const rawValues = labels.map(label => Number(dataMap[label] ?? 0))
+  const maxValue = rawValues.length ? Math.max(...rawValues) : 0
+  const isRatio = maxValue <= 1
+  const values = rawValues.map(v => (isRatio ? Math.round(v * 100) : Math.round(v)))
+  const bg = labels.map(label => (COLOR_MAP[label] ?? ['#475569', '#334155'])[0])
+  const border = labels.map(label => (COLOR_MAP[label] ?? ['#475569', '#334155'])[1])
+
   const data = {
-    labels: ['Positive', 'Negative', 'Neutral'],
+    labels,
     datasets: [
       {
-        data: [
-          Math.round(positive * 100),
-          Math.round(negative * 100),
-          Math.round(neutral * 100),
-        ],
-        backgroundColor: ['#16a34a', '#dc2626', '#6b7280'],
-        borderColor: ['#15803d', '#b91c1c', '#4b5563'],
+        data: values,
+        backgroundColor: bg,
+        borderColor: border,
         borderWidth: 2,
       },
     ],
@@ -31,14 +48,14 @@ export default function SentimentPieChart({ positive = 0, negative = 0, neutral 
       legend: { position: 'bottom', labels: { color: '#e2e8f0', font: { size: 13 } } },
       tooltip: {
         callbacks: {
-          label: ctx => ` ${ctx.label}: ${ctx.parsed}%`,
+          label: ctx => ` ${ctx.label}: ${ctx.parsed}${isRatio ? '%' : ''}`,
         },
       },
     },
   }
 
   // If all zeros show empty placeholder
-  const total = positive + negative + neutral
+  const total = values.reduce((acc, v) => acc + v, 0)
   if (total === 0) {
     return <div className="chart-empty">No data yet</div>
   }

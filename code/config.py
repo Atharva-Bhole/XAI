@@ -4,6 +4,13 @@ from datetime import timedelta
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    return str(val).strip().lower() in {"1", "true", "yes", "on"}
+
+
 class Config:
     # Flask
     SECRET_KEY = os.environ.get("SECRET_KEY", "xsense-super-secret-key-change-in-production")
@@ -32,6 +39,11 @@ class Config:
 
     # ML models cache
     MODELS_CACHE = os.path.join(BASE_DIR, "ml", "cache")
+    PRELOAD_MODELS = _env_bool("PRELOAD_MODELS", True)
+    PRELOAD_POLARITY_MODEL = _env_bool("PRELOAD_POLARITY_MODEL", False)
+    PRELOAD_VISION_MODEL = _env_bool("PRELOAD_VISION_MODEL", False)
+    HF_LOCAL_FILES_ONLY = _env_bool("HF_LOCAL_FILES_ONLY", False)
+    PRELOAD_ONLY_CACHED_MODELS = _env_bool("PRELOAD_ONLY_CACHED_MODELS", True)
 
     # Social Media API keys (fill via .env)
     TWITTER_BEARER_TOKEN = os.environ.get("TWITTER_BEARER_TOKEN", "")

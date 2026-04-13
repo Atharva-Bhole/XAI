@@ -112,7 +112,19 @@ Create a `.env` file in `code/`:
 SECRET_KEY=your-super-secret-key
 JWT_SECRET_KEY=your-jwt-secret
 TWITTER_BEARER_TOKEN=your-twitter-bearer-token
+INSTAGRAM_ACCESS_TOKEN=your-instagram-access-token
+PRELOAD_MODELS=1
+PRELOAD_POLARITY_MODEL=0
+PRELOAD_VISION_MODEL=0
+HF_LOCAL_FILES_ONLY=0
+PRELOAD_ONLY_CACHED_MODELS=1
 ```
+
+The backend automatically loads variables from `code/.env` on startup.
+When `PRELOAD_MODELS=1`, core models are loaded once at boot and reused in memory.
+Set `PRELOAD_POLARITY_MODEL=1` and `PRELOAD_VISION_MODEL=1` only if you want those larger fallback/vision models preloaded at startup.
+Set `HF_LOCAL_FILES_ONLY=1` to force loading strictly from local cache (no network checks/downloads).
+Set `PRELOAD_ONLY_CACHED_MODELS=1` to skip preloading any model that is not fully cached yet, so boot never blocks on large downloads.
 
 ### 4. Start the Flask API server
 

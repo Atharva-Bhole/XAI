@@ -15,10 +15,19 @@ export default function Results() {
   const [downloading, setDownloading] = useState(false)
 
   useEffect(() => {
-    api.get(`/analysis/${id}`)
-      .then(r => setData(r.data))
-      .catch(err => toast.error(err.displayMessage || 'Could not load results.'))
-      .finally(() => setLoading(false))
+    let cancelled = false
+    const loadResult = async () => {
+      try {
+        const r = await api.get(`/analysis/${id}`)
+        if (!cancelled) setData(r.data)
+      } catch (err) {
+        if (!cancelled) toast.error(err.displayMessage || 'Could not load results.')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    loadResult()
+    return () => { cancelled = true }
   }, [id])
 
   const handleDownload = async () => {
@@ -43,7 +52,22 @@ export default function Results() {
   if (!data) return <div className="not-found">Analysis not found. <Link to="/dashboard">Go back</Link></div>
 
   const scores = data.scores ?? {}
+  const emotionScores = data.emotion_scores ?? {}
   const xai = data.xai ?? {}
+  const displayScores = Object.keys(emotionScores).length > 0
+    ? emotionScores
+    : { positive: scores.positive ?? 0, negative: scores.negative ?? 0, neutral: scores.neutral ?? 0 }
+
+  const scoreItems = Object.keys(displayScores).map(key => {
+    const normalized = key.toLowerCase()
+    const label = key.charAt(0).toUpperCase() + key.slice(1)
+    const cls = normalized === 'happy' || normalized === 'positive'
+      ? 'positive'
+      : (normalized === 'sad' || normalized === 'angry' || normalized === 'fear' || normalized === 'disgust' || normalized === 'negative')
+        ? 'negative'
+        : 'neutral'
+    return { key, label, cls, value: displayScores[key] ?? 0 }
+  })
 
   return (
     <div className="results-page">
@@ -92,15 +116,11 @@ export default function Results() {
 
       {/* Score cards */}
       <div className="score-cards">
-        {[
-          { label: 'Positive', key: 'positive', cls: 'positive' },
-          { label: 'Negative', key: 'negative', cls: 'negative' },
-          { label: 'Neutral',  key: 'neutral',  cls: 'neutral' },
-        ].map(({ label, key, cls }) => (
+        {scoreItems.map(({ label, key, cls, value }) => (
           <div className={`score-card score-card--${cls}`} key={key}>
-            <div className="score-pct">{((scores[key] ?? 0) * 100).toFixed(1)}%</div>
+            <div className="score-pct">{(value * 100).toFixed(1)}%</div>
             <div className="score-label">{label}</div>
-            <ScoreBar value={scores[key] ?? 0} variant={cls} />
+            <ScoreBar value={value} variant={cls} />
           </div>
         ))}
       </div>
@@ -109,18 +129,14 @@ export default function Results() {
       <div className="charts-row">
         <div className="chart-card">
           <h3>Score Distribution</h3>
-          <SentimentPieChart
-            positive={scores.positive ?? 0}
-            negative={scores.negative ?? 0}
-            neutral={scores.neutral ?? 0}
-          />
+          <SentimentPieChart dataMap={displayScores} />
         </div>
         <div className="chart-card">
           <h3>Score Breakdown</h3>
           <div className="score-bars-list">
-            <ScoreBar label="Positive" value={scores.positive ?? 0} variant="positive" showLabel />
-            <ScoreBar label="Negative" value={scores.negative ?? 0} variant="negative" showLabel />
-            <ScoreBar label="Neutral"  value={scores.neutral  ?? 0} variant="neutral"  showLabel />
+            {scoreItems.map(({ label, key, cls, value }) => (
+              <ScoreBar key={key} label={label} value={value} variant={cls} showLabel />
+            ))}
           </div>
         </div>
       </div>

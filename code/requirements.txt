@@ -20,6 +20,8 @@ Pillow>=11.0.0
 opencv-python-headless>=4.10.0.84
 # Whisper speech-to-text
 openai-whisper
+# Bundled ffmpeg binary fallback (used when system ffmpeg is not on PATH)
+imageio-ffmpeg>=0.5.1
 # SpeechRecognition fallback
 SpeechRecognition==3.10.4
 

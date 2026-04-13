@@ -71,6 +71,47 @@ def _persist_analysis(user_id, input_type, raw_input, lang_code, translated,
     return rec
 
 
+def _aggregate_post_analyses(post_analyses: list) -> dict:
+    """Aggregate per-post emotion and polarity scores into one summary."""
+    if not post_analyses:
+        return {
+            "sentiment": "Calm",
+            "emotion_scores": {"happy": 0.0, "sad": 0.0, "angry": 0.0, "calm": 1.0, "fear": 0.0, "surprised": 0.0, "disgust": 0.0},
+            "scores": {"positive": 0.33, "negative": 0.33, "neutral": 0.34},
+        }
+
+    total = {"positive": 0.0, "negative": 0.0, "neutral": 0.0}
+    emo_total = {"happy": 0.0, "sad": 0.0, "angry": 0.0, "calm": 0.0, "fear": 0.0, "surprised": 0.0, "disgust": 0.0}
+    for item in post_analyses:
+        scores = item.get("scores", {})
+        total["positive"] += float(scores.get("positive", 0.0))
+        total["negative"] += float(scores.get("negative", 0.0))
+        total["neutral"] += float(scores.get("neutral", 0.0))
+        emotion_scores = item.get("emotion_scores", {})
+        for k in emo_total:
+            emo_total[k] += float(emotion_scores.get(k, 0.0))
+
+    n = float(len(post_analyses))
+    avg = {
+        "positive": total["positive"] / n,
+        "negative": total["negative"] / n,
+        "neutral": total["neutral"] / n,
+    }
+    emo_avg = {k: round(v / n, 4) for k, v in emo_total.items()}
+    emotion_to_label = {
+        "happy": "Happy",
+        "sad": "Sad",
+        "angry": "Angry",
+        "calm": "Calm",
+        "fear": "Fear",
+        "surprised": "Surprised",
+        "disgust": "Disgust",
+    }
+    top_emo = max(emo_avg, key=emo_avg.get)
+    sentiment = emotion_to_label.get(top_emo, "Calm")
+    return {"sentiment": sentiment, "scores": avg, "emotion_scores": emo_avg}
+
+
 # ---- Text analysis ---------------------------------------------------------
 
 @analysis_bp.route("/text", methods=["POST"])
@@ -87,12 +128,14 @@ def analyze_text():
     translated = translate_to_english(text, lang_code)
     result = analyze_text_sentiment(translated)
     xai = generate_text_explanation(translated)
+    xai["emotion_scores"] = result.get("emotion_scores", {})
     result["key_words"] = extract_key_words(xai)
 
     rec = _persist_analysis(
         session["user_id"], "text", text, lang_code, translated if lang_code != "en" else "", result, xai
     )
     response = rec.to_dict()
+    response["emotion_scores"] = result.get("emotion_scores", {})
     response["xai"] = xai
     return jsonify(response), 200
 
@@ -116,6 +159,7 @@ def analyze_image():
         session["user_id"], "image", img_path, "en", "", result, xai
     )
     response = rec.to_dict()
+    response["emotion_scores"] = result.get("emotion_scores", {})
     response["xai"] = xai
     return jsonify(response), 200
 
@@ -141,6 +185,7 @@ def analyze_audio():
     lang_code = result.get("detected_language", "en")
     translated = result.get("translated_text", "")
     xai = result.get("xai_data", {"method": "audio_transcript", "summary": result.get("explanation", ""), "word_weights": []})
+    xai["emotion_scores"] = result.get("emotion_scores", {})
 
     rec = _persist_analysis(
         session["user_id"], "video" if is_video else "audio",
@@ -148,6 +193,8 @@ def analyze_audio():
     )
     response = rec.to_dict()
     response["transcript"] = result.get("transcript", "")
+    response["frame_analyses"] = result.get("frame_analyses", [])
+    response["emotion_scores"] = result.get("emotion_scores", {})
     response["xai"] = xai
     return jsonify(response), 200
 
@@ -163,7 +210,8 @@ def analyze_url():
         return jsonify({"error": "No URL provided."}), 400
 
     bearer = current_app.config.get("TWITTER_BEARER_TOKEN", "")
-    fetched = fetch_text_from_url(url, bearer_token=bearer)
+    insta_token = current_app.config.get("INSTAGRAM_ACCESS_TOKEN", "")
+    fetched = fetch_text_from_url(url, bearer_token=bearer, instagram_token=insta_token)
     if fetched.get("error"):
         return jsonify({"error": fetched["error"]}), 400
 
@@ -171,16 +219,55 @@ def analyze_url():
     if not text:
         return jsonify({"error": "Could not extract text from the provided URL."}), 422
 
+    posts = fetched.get("posts", [])
+    post_analyses = []
+
+    for post in posts:
+        post_text = str(post.get("text", "")).strip()
+        if not post_text:
+            continue
+        post_lang = detect_language(post_text)
+        post_translated = translate_to_english(post_text, post_lang)
+        post_result = analyze_text_sentiment(post_translated)
+        post_analyses.append({
+            "id": post.get("id", ""),
+            "text": post_text,
+            "detected_language": language_display_name(post_lang),
+            "translated_text": post_translated if post_lang != "en" else "",
+            "sentiment": post_result.get("sentiment", "Calm"),
+            "emotion_scores": post_result.get("emotion_scores", {}),
+            "scores": post_result.get("scores", {"positive": 0.0, "negative": 0.0, "neutral": 1.0}),
+        })
+
+    if not post_analyses:
+        return jsonify({"error": "Could not extract analyzable post text from the provided URL."}), 422
+
+    aggregate = _aggregate_post_analyses(post_analyses)
+
+    # Build explanation from concatenated translated content for a single coherent XAI output.
+    combined_text = "\n\n".join(item.get("translated_text") or item.get("text", "") for item in post_analyses)
+    combined_text = combined_text[:8000]
+
     lang_code = detect_language(text)
     translated = translate_to_english(text, lang_code)
-    result = analyze_text_sentiment(translated)
-    xai = generate_text_explanation(translated)
-    result["key_words"] = extract_key_words(xai)
+    xai = generate_text_explanation(combined_text)
+    result = {
+        "sentiment": aggregate["sentiment"],
+        "scores": aggregate["scores"],
+        "emotion_scores": aggregate.get("emotion_scores", {}),
+        "key_words": extract_key_words(xai),
+        "explanation": xai.get("summary", ""),
+    }
+    xai["emotion_scores"] = result.get("emotion_scores", {})
 
     rec = _persist_analysis(
         session["user_id"], "url", url, lang_code, translated if lang_code != "en" else "", result, xai
     )
     response = rec.to_dict()
+    response["source"] = fetched.get("source", "web_scrape")
+    response["post_count"] = len(post_analyses)
+    response["post_analyses"] = post_analyses
+    response["emotion_scores"] = result.get("emotion_scores", {})
     response["fetched_text_preview"] = text[:500]
     response["xai"] = xai
     return jsonify(response), 200
@@ -241,4 +328,5 @@ def get_analysis(analysis_id: int):
         data["xai"] = json.loads(rec.explanation) if rec.explanation and rec.explanation.startswith("{") else {}
     except (json.JSONDecodeError, TypeError):
         data["xai"] = {}
+    data["emotion_scores"] = data.get("xai", {}).get("emotion_scores", {})
     return jsonify(data), 200
