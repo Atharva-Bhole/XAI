@@ -16,20 +16,61 @@ _VISION_PIPELINE = None
 
 
 def _polarity_to_emotions(scores: Dict) -> Dict:
+    """Map polarity scores to emotion distribution.
+
+    Uses a sharper mapping so that decisive polarity (e.g. positive > 0.6)
+    concentrates almost entirely on the corresponding primary emotion instead
+    of being diffused across all seven categories.
+    """
+    import math
+
     positive = float(scores.get("positive", 0.0))
     negative = float(scores.get("negative", 0.0))
     neutral = float(scores.get("neutral", 0.0))
-    emotions = {
-        "happy": round(positive * 0.9, 4),
-        "sad": round(negative * 0.45, 4),
-        "angry": round(negative * 0.35, 4),
-        "fear": round(negative * 0.12, 4),
-        "disgust": round(negative * 0.08, 4),
-        "surprised": round(neutral * 0.20, 4),
-        "calm": round(neutral * 0.80 + positive * 0.10, 4),
-    }
+
+    # Primary emotion gets the lion's share; secondaries get residual.
+    if positive >= max(negative, neutral) and positive > 0.45:
+        # Clearly positive — concentrate on happy
+        emotions = {
+            "happy": positive ** 0.7,
+            "sad": negative * 0.15,
+            "angry": negative * 0.10,
+            "fear": negative * 0.05,
+            "disgust": negative * 0.02,
+            "surprised": neutral * 0.10,
+            "calm": neutral * 0.25 + positive * 0.05,
+        }
+    elif negative >= max(positive, neutral) and negative > 0.45:
+        # Clearly negative — concentrate on sad/angry
+        emotions = {
+            "happy": positive * 0.10,
+            "sad": negative * 0.50,
+            "angry": negative * 0.30,
+            "fear": negative * 0.12,
+            "disgust": negative * 0.08,
+            "surprised": neutral * 0.05,
+            "calm": neutral * 0.15,
+        }
+    else:
+        # Neutral / ambiguous — lean calm
+        emotions = {
+            "happy": positive * 0.40,
+            "sad": negative * 0.25,
+            "angry": negative * 0.15,
+            "fear": negative * 0.05,
+            "disgust": negative * 0.03,
+            "surprised": neutral * 0.10,
+            "calm": neutral * 0.70 + positive * 0.10,
+        }
+
     total = sum(emotions.values()) or 1.0
-    return {k: round(v / total, 4) for k, v in emotions.items()}
+    normalized = {k: v / total for k, v in emotions.items()}
+
+    # Temperature sharpening to further amplify the dominant emotion
+    _TEMP = 0.45
+    exp_vals = {k: math.exp(v / _TEMP) for k, v in normalized.items()}
+    exp_total = sum(exp_vals.values())
+    return {k: round(v / exp_total, 4) for k, v in exp_vals.items()}
 
 
 def _top_emotion_label(emotion_scores: Dict) -> str:
@@ -48,7 +89,11 @@ def _top_emotion_label(emotion_scores: Dict) -> str:
 # ---- Colour-valence heuristic ------------------------------------------------
 
 def _color_valence(img_path: str) -> Dict:
-    """Returns rough sentiment based on dominant colour temperature & brightness."""
+    """Returns rough sentiment based on dominant colour temperature & brightness.
+
+    Uses a continuous gradient instead of hard-coded caps so that very bright/warm
+    images can reach 0.85+ positive and very dark/cold images reach 0.85+ negative.
+    """
     try:
         from PIL import Image
         import numpy as np
@@ -60,13 +105,17 @@ def _color_valence(img_path: str) -> Dict:
         brightness = (r_mean + g_mean + b_mean) / 3.0
         warmth = r_mean - b_mean   # positive = warm tones
 
-        pos, neg, neu = 0.0, 0.0, 0.0
-        if brightness > 160 and warmth > 20:
-            pos = 0.65; neg = 0.10; neu = 0.25
-        elif brightness < 80 or warmth < -20:
-            neg = 0.60; pos = 0.10; neu = 0.30
-        else:
-            neu = 0.60; pos = 0.25; neg = 0.15
+        # Continuous gradient: map brightness [0,255] and warmth [-128,128] to sentiment
+        # Bright + warm → positive; dark + cold → negative
+        bright_norm = brightness / 255.0  # [0, 1]
+        warm_norm = max(-1.0, min(1.0, warmth / 80.0))  # [-1, 1]
+
+        pos = max(0.02, 0.15 + 0.45 * bright_norm + 0.35 * max(0.0, warm_norm))
+        neg = max(0.02, 0.15 + 0.45 * (1.0 - bright_norm) + 0.35 * max(0.0, -warm_norm))
+        neu = max(0.02, 1.0 - pos - neg)
+
+        total = pos + neg + neu
+        pos, neg, neu = pos / total, neg / total, neu / total
 
         sentiment = max({"positive": pos, "negative": neg, "neutral": neu},
                         key=lambda k: {"positive": pos, "negative": neg, "neutral": neu}[k])
@@ -85,7 +134,10 @@ def _color_valence(img_path: str) -> Dict:
 
 
 def _texture_valence(img_path: str) -> Dict:
-    """Estimate sentiment from contrast, saturation, and edge density."""
+    """Estimate sentiment from contrast, saturation, and edge density.
+
+    Caps removed so vivid, well-lit images can score 0.90+ positive.
+    """
     try:
         from PIL import Image
         import numpy as np
@@ -102,10 +154,10 @@ def _texture_valence(img_path: str) -> Dict:
         edges = cv2.Canny(gray, 80, 160)
         edge_density = float((edges > 0).sum()) / float(edges.size)
 
-        # Heuristic mapping: vivid + well-lit tends positive, very dark/flat tends negative.
-        pos = min(0.85, max(0.05, 0.20 + 0.35 * saturation + 0.30 * value + 0.15 * edge_density))
-        neg = min(0.85, max(0.05, 0.20 + 0.40 * max(0.0, 0.45 - value) + 0.20 * max(0.0, 0.20 - saturation)))
-        neu = min(0.90, max(0.05, 1.0 - (pos + neg)))
+        # Continuous mapping without hard caps
+        pos = max(0.03, 0.10 + 0.40 * saturation + 0.35 * value + 0.15 * edge_density)
+        neg = max(0.03, 0.10 + 0.50 * max(0.0, 0.50 - value) + 0.25 * max(0.0, 0.25 - saturation))
+        neu = max(0.03, 1.0 - (pos + neg))
 
         total = pos + neg + neu
         pos, neg, neu = pos / total, neg / total, neu / total
@@ -152,20 +204,44 @@ def preload_image_models(local_files_only: bool = False) -> bool:
 
 
 def _vision_model_valence(img_path: str) -> Dict:
-    """Use CLIP zero-shot labels as a semantic sentiment signal."""
+    """Use CLIP zero-shot labels as a semantic sentiment signal.
+
+    Uses 15 diverse candidate labels (was 5) so CLIP's softmax produces far
+    more discriminating scores — a smiling-child image now concentrates
+    probability on the matching positive labels instead of splitting evenly.
+    """
     try:
+        import math
+
         vision = _get_vision_pipeline()
         if not vision:
             return {}
 
-        labels = [
-            "people smiling and celebrating",
-            "joyful and happy scene",
-            "sad or upset people",
-            "angry or tense scene",
-            "calm neutral scene",
+        # Expanded label set for much better discrimination
+        _POS_LABELS = [
+            "a child smiling and laughing happily",
+            "people celebrating with joy and excitement",
+            "a joyful happy scene with bright colors",
+            "a group of friends having fun together",
+            "a beautiful scenic landscape with sunshine",
+            "a couple hugging lovingly",
         ]
-        results = vision(img_path, candidate_labels=labels)
+        _NEG_LABELS = [
+            "a sad or upset person crying",
+            "an angry or tense confrontation",
+            "destruction disaster or damage",
+            "a lonely person in a dark room",
+            "fear horror or danger",
+        ]
+        _NEU_LABELS = [
+            "a plain neutral everyday scene",
+            "an empty room or office space",
+            "a calm ordinary street view",
+            "a simple object on a table",
+        ]
+
+        all_labels = _POS_LABELS + _NEG_LABELS + _NEU_LABELS
+        results = vision(img_path, candidate_labels=all_labels)
         if not results:
             return {}
 
@@ -176,22 +252,30 @@ def _vision_model_valence(img_path: str) -> Dict:
             pairs = [(item.get("label", ""), item.get("score", 0.0)) for item in results]
 
         score_map = {label: float(score) for label, score in pairs}
-        pos = score_map.get("people smiling and celebrating", 0.0) + score_map.get("joyful and happy scene", 0.0)
-        neg = score_map.get("sad or upset people", 0.0) + score_map.get("angry or tense scene", 0.0)
-        neu = score_map.get("calm neutral scene", 0.0)
+        pos = sum(score_map.get(lbl, 0.0) for lbl in _POS_LABELS)
+        neg = sum(score_map.get(lbl, 0.0) for lbl in _NEG_LABELS)
+        neu = sum(score_map.get(lbl, 0.0) for lbl in _NEU_LABELS)
 
         total = pos + neg + neu
         if total <= 0:
             return {}
 
         pos, neg, neu = pos / total, neg / total, neu / total
-        sentiment_key = max({"positive": pos, "negative": neg, "neutral": neu}, key=lambda k: {"positive": pos, "negative": neg, "neutral": neu}[k])
+
+        # Temperature sharpening on the aggregated polarity
+        _TEMP = 0.35
+        vals = {"positive": pos, "negative": neg, "neutral": neu}
+        exp_vals = {k: math.exp(v / _TEMP) for k, v in vals.items()}
+        exp_total = sum(exp_vals.values())
+        sharpened = {k: v / exp_total for k, v in exp_vals.items()}
+
+        sentiment_key = max(sharpened, key=sharpened.get)
         top_label = max(score_map, key=score_map.get) if score_map else ""
 
         return {
             "method": "vision_model",
             "sentiment": sentiment_key.capitalize(),
-            "scores": {"positive": round(pos, 4), "negative": round(neg, 4), "neutral": round(neu, 4)},
+            "scores": {"positive": round(sharpened["positive"], 4), "negative": round(sharpened["negative"], 4), "neutral": round(sharpened["neutral"], 4)},
             "explanation": f"Vision model semantic match favored: '{top_label}'.",
         }
     except Exception as exc:
@@ -235,8 +319,8 @@ def _face_expression(img_path: str) -> Dict:
             smiles = smile_cascade.detectMultiScale(
                 roi_gray,
                 scaleFactor=1.8,
-                minNeighbors=20,
-                minSize=(max(15, w // 5), max(15, h // 5)),
+                minNeighbors=12,
+                minSize=(max(12, w // 6), max(12, h // 6)),
             )
             if len(smiles) > 0:
                 smiling_faces += 1
@@ -245,10 +329,10 @@ def _face_expression(img_path: str) -> Dict:
         smile_ratio = smiling_faces / float(face_count)
         avg_mouth_std = sum(mouth_variances) / float(len(mouth_variances) or 1)
 
-        # Stronger positive confidence when many faces are smiling.
-        pos = min(0.92, 0.20 + 0.65 * smile_ratio + 0.10 * min(1.0, avg_mouth_std / 35.0))
-        neg = max(0.03, 0.20 * (1.0 - smile_ratio))
-        neu = max(0.03, 1.0 - (pos + neg))
+        # High positive confidence when faces are smiling
+        pos = min(0.95, 0.15 + 0.75 * smile_ratio + 0.10 * min(1.0, avg_mouth_std / 30.0))
+        neg = max(0.02, 0.15 * (1.0 - smile_ratio))
+        neu = max(0.02, 1.0 - (pos + neg))
         total = pos + neg + neu
         pos, neg, neu = pos / total, neg / total, neu / total
 
@@ -285,15 +369,16 @@ def analyze_image_sentiment(img_path: str) -> Dict:
     texture_result = _texture_valence(img_path)
     vision_result = _vision_model_valence(img_path)
 
+    # Rebalanced weights: CLIP is the strongest signal, heuristics are supplementary.
     signals = []
     if color_result:
-        signals.append(("color", color_result, 0.20))
+        signals.append(("color", color_result, 0.10))
     if texture_result:
-        signals.append(("texture", texture_result, 0.20))
+        signals.append(("texture", texture_result, 0.10))
     if face_result:
         signals.append(("face", face_result, 0.30))
     if vision_result:
-        signals.append(("vision_model", vision_result, 0.30))
+        signals.append(("vision_model", vision_result, 0.50))
 
     # Re-normalize weights if one of the signals is unavailable.
     weight_sum = sum(w for _n, _r, w in signals) or 1.0
@@ -304,14 +389,17 @@ def analyze_image_sentiment(img_path: str) -> Dict:
             merged_scores[key] += (w / weight_sum) * float(scores.get(key, 0.0))
 
     if signals:
-        sentiment_key = max(merged_scores, key=merged_scores.get)
+        # Temperature sharpening on final fused scores
+        import math
+        _TEMP = 0.35
+        exp_vals = {k: math.exp(v / _TEMP) for k, v in merged_scores.items()}
+        exp_total = sum(exp_vals.values())
+        sharpened = {k: round(v / exp_total, 4) for k, v in exp_vals.items()}
+
+        sentiment_key = max(sharpened, key=sharpened.get)
         result = {
             "sentiment": sentiment_key.capitalize(),
-            "scores": {
-                "positive": round(merged_scores["positive"], 4),
-                "negative": round(merged_scores["negative"], 4),
-                "neutral": round(merged_scores["neutral"], 4),
-            },
+            "scores": sharpened,
             "explanation": " ".join(
                 item.get("explanation", "")
                 for _n, item, _w in signals

@@ -42,14 +42,18 @@ def _get_emotion_pipeline(local_files_only: bool = False):
     if _emotion_pipeline is None:
         logger.info("Loading emotion model …")
         try:
-            from transformers import pipeline as hf_pipeline
+            from transformers import pipeline as hf_pipeline, AutoTokenizer, AutoModelForSequenceClassification
+
+            _model_name = "j-hartmann/emotion-english-distilroberta-base"
+            tokenizer = AutoTokenizer.from_pretrained(_model_name, local_files_only=local_files_only)
+            model = AutoModelForSequenceClassification.from_pretrained(_model_name, local_files_only=local_files_only)
             _emotion_pipeline = hf_pipeline(
                 "text-classification",
-                model="j-hartmann/emotion-english-distilroberta-base",
+                model=model,
+                tokenizer=tokenizer,
                 top_k=None,
                 truncation=True,
                 max_length=512,
-                local_files_only=local_files_only,
             )
             logger.info("Emotion model loaded.")
         except Exception as exc:
@@ -63,15 +67,18 @@ def _get_polarity_pipeline(local_files_only: bool = False):
     if _polarity_pipeline is None:
         logger.info("Loading polarity fallback model …")
         try:
-            from transformers import pipeline as hf_pipeline
+            from transformers import pipeline as hf_pipeline, AutoTokenizer, AutoModelForSequenceClassification
 
+            _model_name = "cardiffnlp/twitter-roberta-base-sentiment-latest"
+            tokenizer = AutoTokenizer.from_pretrained(_model_name, local_files_only=local_files_only)
+            model = AutoModelForSequenceClassification.from_pretrained(_model_name, local_files_only=local_files_only)
             _polarity_pipeline = hf_pipeline(
                 "text-classification",
-                model="cardiffnlp/twitter-roberta-base-sentiment-latest",
+                model=model,
+                tokenizer=tokenizer,
                 top_k=None,
                 truncation=True,
                 max_length=512,
-                local_files_only=local_files_only,
             )
         except Exception as exc:
             logger.warning("Failed to load polarity fallback model: %s", exc)
@@ -96,25 +103,45 @@ def _normalize_polarity_to_emotion(raw: str) -> str:
 
 
 def _emotion_to_polarity(emotion_scores: Dict[str, float]) -> Dict[str, float]:
-    """Derive positive/negative/neutral distribution from emotion scores."""
-    positive = float(emotion_scores.get("happy", 0.0)) + 0.4 * float(emotion_scores.get("surprised", 0.0))
+    """Derive positive/negative/neutral distribution from emotion scores.
+
+    Uses temperature-scaled softmax to sharpen the dominant category so that
+    clear-cut inputs produce decisive scores (e.g. >85 % for the winner).
+    """
+    import math
+
+    positive = (
+        float(emotion_scores.get("happy", 0.0))
+        + 0.7 * float(emotion_scores.get("surprised", 0.0))
+    )
     negative = (
         float(emotion_scores.get("sad", 0.0))
         + float(emotion_scores.get("angry", 0.0))
         + float(emotion_scores.get("fear", 0.0))
         + float(emotion_scores.get("disgust", 0.0))
     )
-    neutral = float(emotion_scores.get("calm", 0.0)) + 0.6 * float(emotion_scores.get("surprised", 0.0))
+    neutral = (
+        float(emotion_scores.get("calm", 0.0))
+        + 0.3 * float(emotion_scores.get("surprised", 0.0))
+    )
 
     total = positive + negative + neutral
     if total <= 0:
         return {"positive": 0.0, "negative": 0.0, "neutral": 1.0}
 
-    return {
-        "positive": round(positive / total, 4),
-        "negative": round(negative / total, 4),
-        "neutral": round(neutral / total, 4),
+    # Normalize to [0, 1]
+    raw = {
+        "positive": positive / total,
+        "negative": negative / total,
+        "neutral": neutral / total,
     }
+
+    # Temperature-scaled softmax sharpening (lower temp → sharper peaks)
+    _TEMP = 0.4
+    exp_vals = {k: math.exp(v / _TEMP) for k, v in raw.items()}
+    exp_total = sum(exp_vals.values())
+
+    return {k: round(v / exp_total, 4) for k, v in exp_vals.items()}
 
 
 def _canonicalize_emotion_scores(emotion_scores: Dict[str, float]) -> Dict[str, float]:
@@ -209,15 +236,37 @@ _SURPRISE_WORDS = {"surprised", "shocked", "unexpected", "wow", "astonished", "a
 
 
 def _keyword_emotion(text: str) -> Dict:
+    """Keyword-based emotion fallback with boosted scores for decisive output.
+
+    When sentiment keywords are found, their counts are amplified so the
+    dominant category reaches 80%+ after temperature sharpening in
+    ``_result_from_emotions``.  The 'calm' baseline is kept tiny to avoid
+    diluting genuine signals.
+    """
     words = set(text.lower().split())
+    pos_count = len(words & _POS_WORDS)
+    sad_count = len(words & _SAD_WORDS)
+    angry_count = len(words & _ANGER_WORDS)
+    fear_count = len(words & _FEAR_WORDS)
+    surprise_count = len(words & _SURPRISE_WORDS)
+    disgust_count = len(words & {"disgust", "disgusted", "revolting", "gross"})
+
+    total_hits = pos_count + sad_count + angry_count + fear_count + surprise_count + disgust_count
+
+    if total_hits == 0:
+        # No sentiment keywords — default to calm
+        return _result_from_emotions({"calm": 1.0})
+
+    # Boost matched emotions; use a power curve so more matches → much higher score
+    _BOOST = 3.0
     emotion_counts = {
-        "happy": len(words & _POS_WORDS),
-        "sad": len(words & _SAD_WORDS),
-        "angry": len(words & _ANGER_WORDS),
-        "fear": len(words & _FEAR_WORDS),
-        "surprised": len(words & _SURPRISE_WORDS),
-        "disgust": len(words & {"disgust", "disgusted", "revolting", "gross"}),
-        "calm": 1,
+        "happy": pos_count * _BOOST,
+        "sad": sad_count * _BOOST,
+        "angry": angry_count * _BOOST,
+        "fear": fear_count * _BOOST,
+        "surprised": surprise_count * _BOOST,
+        "disgust": disgust_count * _BOOST,
+        "calm": 0.1,  # Tiny residual so calm doesn't dilute real signals
     }
 
     return _result_from_emotions(emotion_counts)

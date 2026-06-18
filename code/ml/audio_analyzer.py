@@ -7,6 +7,7 @@ Pipeline:
   3. Run text sentiment on the transcript.
 """
 import os
+import math
 import logging
 import importlib
 import shutil
@@ -191,7 +192,7 @@ def _aggregate_visual_results(frame_results: List[Dict]) -> Dict:
 
 
 def _fuse_modal_scores(audio_scores: Dict, visual_scores: Dict, has_transcript: bool) -> Dict:
-    """Fuse audio/text and visual scores into one final score distribution."""
+    """Fuse audio/text and visual scores into one final score distribution with temperature sharpening."""
     if audio_scores and visual_scores:
         audio_w = 0.65 if has_transcript else 0.0
         visual_w = 1.0 - audio_w
@@ -202,8 +203,15 @@ def _fuse_modal_scores(audio_scores: Dict, visual_scores: Dict, has_transcript: 
             "negative": audio_w * float(audio_scores.get("negative", 0.0)) + visual_w * float(visual_scores.get("negative", 0.0)),
             "neutral": audio_w * float(audio_scores.get("neutral", 0.0)) + visual_w * float(visual_scores.get("neutral", 0.0)),
         }
-        sentiment = max(fused, key=fused.get).capitalize()
-        return {"sentiment": sentiment, "scores": {k: round(v, 4) for k, v in fused.items()}}
+        
+        # Apply temperature sharpening
+        temp = 0.15
+        exp_scores = {k: math.exp(v / temp) for k, v in fused.items()}
+        total_exp = sum(exp_scores.values()) or 1.0
+        sharpened = {k: round(v / total_exp, 4) for k, v in exp_scores.items()}
+
+        sentiment = max(sharpened, key=sharpened.get).capitalize()
+        return {"sentiment": sentiment, "scores": sharpened}
     if audio_scores:
         return {
             "sentiment": max(audio_scores, key=audio_scores.get).capitalize(),
@@ -237,8 +245,11 @@ def _fuse_emotion_scores(audio_emotions: Dict, visual_emotions: Dict, has_transc
         fused = {k: 0.0 for k in keys}
         fused["calm"] = 1.0
 
-    total = sum(fused.values()) or 1.0
-    return {k: round(v / total, 4) for k, v in fused.items()}
+    # Apply temperature sharpening
+    temp = 0.15
+    exp_scores = {k: math.exp(v / temp) for k, v in fused.items()}
+    total_exp = sum(exp_scores.values()) or 1.0
+    return {k: round(v / total_exp, 4) for k, v in exp_scores.items()}
 
 
 # ---- Transcription ----------------------------------------------------------

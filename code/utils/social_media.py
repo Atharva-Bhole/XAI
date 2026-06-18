@@ -120,7 +120,23 @@ def _fetch_instagram_post(post_url: str, access_token: str = "") -> Dict:
                     }]
                 }
 
-        headers = {"User-Agent": "Mozilla/5.0 (X-Sense Sentiment Analyser)"}
+        # Fallback to HTML scraping
+        # Note: Instagram heavily restricts scraping without an API token and often redirects to a login page.
+        # We simulate a modern browser to improve the chances of fetching the og:description before the redirect.
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Upgrade-Insecure-Requests": "1"
+        }
+        logger.info("Attempting Instagram scrape without token (Expect possible login redirect failure)")
         html = _http_get(post_url, headers=headers, timeout=15)
         text = _extract_social_text_from_html(html)
         if text:
