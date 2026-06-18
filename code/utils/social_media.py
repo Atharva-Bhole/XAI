@@ -101,10 +101,59 @@ def _extract_social_text_from_html(html: str) -> str:
 
 
 def _fetch_instagram_post(post_url: str, access_token: str = "") -> Dict:
-    """Fetch Instagram post text (caption/description) via oEmbed or HTML fallback."""
+    """Fetch Instagram post text and media via instaloader, with Graph API fallback."""
     try:
+        import instaloader
+        import tempfile
+        import os
+        from flask import current_app
+
+        # Extract shortcode
+        m = INSTAGRAM_URL_RE.match(post_url)
+        if not m:
+            return {"posts": []}
+        shortcode = m.group(3)
+
+        try:
+            L = instaloader.Instaloader(quiet=True)
+            post = instaloader.Post.from_shortcode(L.context, shortcode)
+
+            text = _normalize_text(post.caption or "")
+            media_url = post.video_url if post.is_video else post.url
+            media_type = "video" if post.is_video else "image"
+            
+            media_path = None
+            if media_url:
+                upload_dir = current_app.config.get("UPLOAD_FOLDER", "/tmp") if current_app else "/tmp"
+                os.makedirs(upload_dir, exist_ok=True)
+                ext = ".mp4" if post.is_video else ".jpg"
+                fd, temp_path = tempfile.mkstemp(suffix=ext, dir=upload_dir)
+                os.close(fd)
+                # Download media
+                req = Request(media_url, headers={"User-Agent": "Mozilla/5.0"})
+                with urlopen(req, timeout=30) as resp, open(temp_path, "wb") as out_file:
+                    out_file.write(resp.read())
+                media_path = temp_path
+
+            result = {
+                "posts": [{
+                    "id": shortcode,
+                    "text": text,
+                    "created_at": str(post.date_utc) if post.date_utc else "",
+                }]
+            }
+            if media_path:
+                result["media_path"] = media_path
+                result["media_type"] = media_type
+
+            return result
+        except Exception as exc:
+            logger.warning("Instagram fetch failed via instaloader: %s", exc)
+            if not access_token:
+                raise exc
+
         if access_token:
-            # Meta Graph oEmbed endpoint (requires app/user token with oEmbed permissions).
+            logger.info("Falling back to Instagram Graph API oEmbed")
             oembed_url = (
                 "https://graph.facebook.com/v21.0/instagram_oembed"
                 f"?url={quote(post_url, safe='')}&access_token={quote(access_token, safe='')}"
@@ -114,35 +163,13 @@ def _fetch_instagram_post(post_url: str, access_token: str = "") -> Dict:
             if text:
                 return {
                     "posts": [{
-                        "id": data.get("media_id", ""),
+                        "id": data.get("media_id", shortcode),
                         "text": text,
                         "created_at": "",
                     }]
                 }
-
-        # Fallback to HTML scraping
-        # Note: Instagram heavily restricts scraping without an API token and often redirects to a login page.
-        # We simulate a modern browser to improve the chances of fetching the og:description before the redirect.
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-            "Sec-Ch-Ua-Mobile": "?0",
-            "Sec-Ch-Ua-Platform": '"Windows"',
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-User": "?1",
-            "Upgrade-Insecure-Requests": "1"
-        }
-        logger.info("Attempting Instagram scrape without token (Expect possible login redirect failure)")
-        html = _http_get(post_url, headers=headers, timeout=15)
-        text = _extract_social_text_from_html(html)
-        if text:
-            return {"posts": [{"id": "", "text": text, "created_at": ""}]}
     except Exception as exc:
-        logger.warning("Instagram fetch failed: %s", exc)
+        logger.warning("Instagram fetch completely failed: %s", exc)
 
     return {"posts": []}
 
@@ -174,8 +201,7 @@ def _coalesce_posts(posts: List[Dict]) -> List[Dict]:
     cleaned = []
     for idx, post in enumerate(posts, start=1):
         text = _normalize_text(str(post.get("text", "")))
-        if not text:
-            continue
+        # We allow empty text now, because media-only posts might have empty captions
         cleaned.append({
             "id": post.get("id") or f"post_{idx}",
             "text": text,
@@ -185,7 +211,7 @@ def _coalesce_posts(posts: List[Dict]) -> List[Dict]:
 
 
 def fetch_text_from_url(url: str, bearer_token: str = "", instagram_token: str = "") -> Dict:
-    """Return extracted URL content and a list of post-like text items."""
+    """Return extracted URL content and a list of post-like text items, potentially with media."""
     # Validate the URL is http/https to prevent SSRF via other schemes
     safe_url_re = re.compile(r"^https?://", re.IGNORECASE)
     if not safe_url_re.match(url):
@@ -206,7 +232,7 @@ def fetch_text_from_url(url: str, bearer_token: str = "", instagram_token: str =
         posts = _coalesce_posts(out.get("posts", []))
         if posts:
             return {
-                "text": "\n\n".join(p["text"] for p in posts),
+                "text": "\n\n".join(p["text"] for p in posts if p.get("text")),
                 "source": "twitter",
                 "posts": posts,
             }
@@ -216,7 +242,7 @@ def fetch_text_from_url(url: str, bearer_token: str = "", instagram_token: str =
         posts = _coalesce_posts(generic.get("posts", []))
         if posts:
             return {
-                "text": "\n\n".join(p["text"] for p in posts),
+                "text": "\n\n".join(p["text"] for p in posts if p.get("text")),
                 "source": "twitter_scrape",
                 "posts": posts,
             }
@@ -225,17 +251,21 @@ def fetch_text_from_url(url: str, bearer_token: str = "", instagram_token: str =
     if ig:
         out = _fetch_instagram_post(url, instagram_token)
         posts = _coalesce_posts(out.get("posts", []))
-        if posts:
-            return {
-                "text": "\n\n".join(p["text"] for p in posts),
+        if posts or out.get("media_path"):
+            result = {
+                "text": "\n\n".join(p["text"] for p in posts if p.get("text")),
                 "source": "instagram",
                 "posts": posts,
             }
+            if out.get("media_path"):
+                result["media_path"] = out.get("media_path")
+                result["media_type"] = out.get("media_type")
+            return result
 
     generic = _fetch_generic_url(url)
     posts = _coalesce_posts(generic.get("posts", []))
     return {
-        "text": "\n\n".join(p["text"] for p in posts),
+        "text": "\n\n".join(p["text"] for p in posts if p.get("text")),
         "source": "web_scrape",
         "posts": posts,
     }

@@ -38,6 +38,7 @@ fpdf2==2.7.9
 # ---- Web scraping (social media URL input) ----
 requests==2.32.3
 beautifulsoup4==4.12.3
+instaloader==4.14
 
 # ---- General utilities ----
 python-dotenv==1.0.1

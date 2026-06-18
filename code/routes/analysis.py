@@ -217,47 +217,77 @@ def analyze_url():
         return jsonify({"error": fetched["error"]}), 400
 
     text = fetched.get("text", "")
-    if not text:
-        return jsonify({"error": "Could not extract text from the provided URL."}), 422
+    media_path = fetched.get("media_path")
+    media_type = fetched.get("media_type")
+
+    if not text and not media_path:
+        return jsonify({"error": "Could not extract text or media from the provided URL."}), 422
 
     posts = fetched.get("posts", [])
     post_analyses = []
 
     for post in posts:
         post_text = str(post.get("text", "")).strip()
-        if not post_text:
-            continue
-        post_lang = detect_language(post_text)
-        post_translated = translate_to_english(post_text, post_lang)
-        post_result = analyze_text_sentiment(post_translated)
-        post_analyses.append({
-            "id": post.get("id", ""),
-            "text": post_text,
-            "detected_language": language_display_name(post_lang),
-            "translated_text": post_translated if post_lang != "en" else "",
-            "sentiment": post_result.get("sentiment", "Calm"),
-            "emotion_scores": post_result.get("emotion_scores", {}),
-            "scores": post_result.get("scores", {"positive": 0.0, "negative": 0.0, "neutral": 1.0}),
-        })
+        if post_text:
+            post_lang = detect_language(post_text)
+            post_translated = translate_to_english(post_text, post_lang)
+            post_result = analyze_text_sentiment(post_translated)
+            post_analyses.append({
+                "id": post.get("id", ""),
+                "text": post_text,
+                "detected_language": language_display_name(post_lang),
+                "translated_text": post_translated if post_lang != "en" else "",
+                "sentiment": post_result.get("sentiment", "Calm"),
+                "emotion_scores": post_result.get("emotion_scores", {}),
+                "scores": post_result.get("scores", {"positive": 0.0, "negative": 0.0, "neutral": 1.0}),
+            })
+
+    media_result = None
+    media_xai = None
+    if media_path:
+        if media_type == "image":
+            media_result = analyze_image_sentiment(media_path)
+            media_xai = {"method": "visual", "summary": media_result.get("explanation", ""), "word_weights": []}
+        elif media_type == "video":
+            media_result = analyze_audio_sentiment(media_path, is_video=True)
+            media_xai = media_result.get("xai_data", {"method": "audio_transcript", "summary": media_result.get("explanation", ""), "word_weights": []})
+            
+        if media_result:
+            post_analyses.append({
+                "id": "media",
+                "text": media_result.get("transcript", "") or "[Media Content]",
+                "detected_language": media_result.get("detected_language", "en"),
+                "translated_text": media_result.get("translated_text", ""),
+                "sentiment": media_result.get("sentiment", "Calm"),
+                "emotion_scores": media_result.get("emotion_scores", {}),
+                "scores": media_result.get("scores", {"positive": 0.0, "negative": 0.0, "neutral": 1.0}),
+            })
+        
+        try:
+            os.remove(media_path)
+        except OSError:
+            pass
 
     if not post_analyses:
-        return jsonify({"error": "Could not extract analyzable post text from the provided URL."}), 422
+        return jsonify({"error": "Could not extract analyzable content from the provided URL."}), 422
 
     aggregate = _aggregate_post_analyses(post_analyses)
 
-    # Build explanation from concatenated translated content for a single coherent XAI output.
-    combined_text = "\n\n".join(item.get("translated_text") or item.get("text", "") for item in post_analyses)
+    combined_text = "\n\n".join(item.get("translated_text") or item.get("text", "") for item in post_analyses if item.get("id") != "media")
     combined_text = combined_text[:8000]
 
-    lang_code = detect_language(text)
-    translated = translate_to_english(text, lang_code)
-    xai = generate_text_explanation(combined_text)
+    lang_code = detect_language(text) if text else "en"
+    translated = translate_to_english(text, lang_code) if text else ""
+    xai = generate_text_explanation(combined_text) if combined_text else {}
+    if not xai and media_xai:
+        xai = media_xai
+
     result = {
         "sentiment": aggregate["sentiment"],
         "scores": aggregate["scores"],
         "emotion_scores": aggregate.get("emotion_scores", {}),
-        "key_words": extract_key_words(xai),
-        "explanation": xai.get("summary", ""),
+        "key_words": extract_key_words(xai) if xai else [],
+        "explanation": xai.get("summary", "") if xai else "",
     }
     xai["emotion_scores"] = result.get("emotion_scores", {})
 
