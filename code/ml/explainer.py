@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 # --------------------------------------------------------------------------- #
 
 def _lime_explain(text: str, predict_fn) -> Dict:
-    """Run LIME and return explanation dict."""
+    """Run LIME and return explanation dict mapped to a 1D sentiment scale."""
     try:
         from lime.lime_text import LimeTextExplainer
         import numpy as np
@@ -26,13 +26,26 @@ def _lime_explain(text: str, predict_fn) -> Dict:
         exp = explainer.explain_instance(
             text,
             predict_fn,
-            num_features=10,
+            labels=(0, 2),
+            num_features=15,
             num_samples=300,
         )
-        word_weights = exp.as_list()
+        
+        neg_dict = {w: float(weight) for w, weight in exp.as_list(label=0)}
+        pos_dict = {w: float(weight) for w, weight in exp.as_list(label=2)}
+        
+        all_words = set(neg_dict.keys()).union(set(pos_dict.keys()))
+        
+        combined = []
+        for w in all_words:
+            w_score = pos_dict.get(w, 0.0) - neg_dict.get(w, 0.0)
+            combined.append({"word": w, "weight": round(w_score, 4)})
+        combined.sort(key=lambda x: abs(x["weight"]), reverse=True)
+        combined = combined[:10]
+
         explanation = {
             "method": "LIME",
-            "word_weights": [{"word": w, "weight": round(float(s), 4)} for w, s in word_weights],
+            "word_weights": combined,
         }
         return explanation
     except Exception as exc:
