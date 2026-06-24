@@ -34,12 +34,33 @@ def _lime_explain(text: str, predict_fn) -> Dict:
         neg_dict = {w: float(weight) for w, weight in exp.as_list(label=0)}
         pos_dict = {w: float(weight) for w, weight in exp.as_list(label=2)}
         
+        STOPWORDS = {
+            "i", "me", "my", "myself", "we", "our", "ours", "ourselves", "you", "your", "yours",
+            "yourself", "yourselves", "he", "him", "his", "himself", "she", "her", "hers", "herself",
+            "it", "its", "itself", "they", "them", "their", "theirs", "themselves", "what", "which",
+            "who", "whom", "this", "that", "these", "those", "am", "is", "are", "was", "were", "be",
+            "been", "being", "have", "has", "had", "having", "do", "does", "did", "doing", "a", "an",
+            "the", "and", "but", "if", "or", "because", "as", "until", "while", "of", "at", "by",
+            "for", "with", "about", "against", "between", "into", "through", "during", "before",
+            "after", "above", "below", "to", "from", "up", "down", "in", "out", "on", "off", "over",
+            "under", "again", "further", "then", "once", "here", "there", "when", "where", "why",
+            "how", "all", "any", "both", "each", "few", "more", "most", "other", "some", "such",
+            "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very", "s", "t",
+            "can", "will", "just", "don", "should", "now"
+        }
+        
         all_words = set(neg_dict.keys()).union(set(pos_dict.keys()))
         
         combined = []
         for w in all_words:
+            w_lower = w.lower()
+            if w_lower in STOPWORDS or len(w) < 2:
+                continue
+            # Universal weight: + pushes toward Positive, - pushes toward Negative
             w_score = pos_dict.get(w, 0.0) - neg_dict.get(w, 0.0)
             combined.append({"word": w, "weight": round(w_score, 4)})
+            
+        # Sort by absolute impact and keep the top 10
         combined.sort(key=lambda x: abs(x["weight"]), reverse=True)
         combined = combined[:10]
 

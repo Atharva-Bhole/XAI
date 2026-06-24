@@ -116,6 +116,33 @@ export default function Results() {
         </div>
       </div>
 
+      {/* Mixed Sentiment Alert */}
+      {data.is_mixed && data.aspects && data.aspects.length > 0 && (
+        <div className="mixed-sentiment-alert" style={{ background: '#fef3c7', padding: '1rem', borderRadius: '8px', marginBottom: '2rem', border: '1px solid #fde68a' }}>
+          <h3 style={{ marginTop: 0, color: '#92400e', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span style={{ fontSize: '1.2rem' }}>⚠️</span> Mixed Sentiment Detected
+          </h3>
+          <p style={{ color: '#b45309', marginBottom: '1rem', fontSize: '0.95rem' }}>
+            This input contains contrasting statements. The overall score has been balanced to reflect this mix.
+          </p>
+          <div className="aspects-list" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {data.aspects.map((asp, idx) => (
+              <div key={idx} style={{ 
+                padding: '0.75rem', 
+                background: '#fff', 
+                borderRadius: '6px', 
+                borderLeft: `4px solid ${asp.sentiment === 'Positive' ? '#16a34a' : '#dc2626'}` 
+              }}>
+                <span style={{ fontWeight: 600, color: asp.sentiment === 'Positive' ? '#16a34a' : '#dc2626', marginRight: '0.5rem' }}>
+                  {asp.sentiment === 'Positive' ? '✓ Positive Aspect:' : '✗ Negative Aspect:'}
+                </span>
+                <span>{asp.text}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Score cards */}
       <div className="score-cards">
         {scoreItems.map(({ label, key, cls, value }) => (

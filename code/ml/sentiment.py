@@ -172,15 +172,74 @@ def _result_from_emotions(emotion_scores: Dict[str, float]) -> Dict:
     }
 
 
+def _detect_mixed_sentiment(text: str, pipe) -> Dict:
+    """Splits text by contrast conjunctions and scores clauses to balance the overall sentiment."""
+    import re
+    # Split on contrast conjunctions
+    clauses = re.split(r'\b(?:but|however|although|yet|though|nevertheless)\b', text, flags=re.IGNORECASE)
+    clauses = [c.strip() for c in clauses if len(c.strip()) > 5]
+    
+    if len(clauses) < 2:
+        return None
+        
+    full_results = pipe(text[:512])[0]
+    overall_emotions: Dict[str, float] = {}
+    for item in full_results:
+        norm = _normalize_emotion_label(item.get("label", "")).lower()
+        overall_emotions[norm] = overall_emotions.get(norm, 0.0) + float(item.get("score", 0.0))
+        
+    aspects = []
+    has_pos = False
+    has_neg = False
+    
+    # Analyze each clause
+    for clause in clauses:
+        clause_res = pipe(clause[:512])[0]
+        c_emotions: Dict[str, float] = {}
+        for item in clause_res:
+            norm = _normalize_emotion_label(item.get("label", "")).lower()
+            c_emotions[norm] = c_emotions.get(norm, 0.0) + float(item.get("score", 0.0))
+            
+        c_result = _result_from_emotions(c_emotions)
+        c_sentiment = c_result["sentiment"]
+        c_polarity = c_result["scores"]
+        
+        # Accumulate scores to balance the overall average
+        for k, v in c_emotions.items():
+            overall_emotions[k] = overall_emotions.get(k, 0.0) + v
+            
+        if c_polarity["positive"] > 0.5:
+            aspects.append({"text": clause, "sentiment": "Positive"})
+            has_pos = True
+        elif c_polarity["negative"] > 0.5:
+            aspects.append({"text": clause, "sentiment": "Negative"})
+            has_neg = True
+            
+    is_mixed = has_pos and has_neg
+    
+    # Average the accumulated emotions
+    num_components = len(clauses) + 1
+    for k in overall_emotions:
+        overall_emotions[k] /= num_components
+        
+    result = _result_from_emotions(overall_emotions)
+    if is_mixed:
+        result["is_mixed"] = True
+        result["aspects"] = aspects
+        
+    return result
+
+
 def analyze_text_sentiment(text: str) -> Dict:
     """
     Returns an emotion-first dict:
     {
         "sentiment": "Happy" | "Sad" | "Angry" | "Calm" | ...,
         "emotion_scores": {"happy": float, "sad": float, ...},
-        "scores": {"positive": float, "negative": float, "neutral": float}
+        "scores": {"positive": float, "negative": float, "neutral": float},
+        "is_mixed": bool,
+        "aspects": [{"text": str, "sentiment": str}]
     }
-    `scores` are retained for backward compatibility with stored analytics/reporting.
     """
     if not text or not text.strip():
         return _result_from_emotions({"calm": 1.0})
@@ -188,6 +247,11 @@ def analyze_text_sentiment(text: str) -> Dict:
     pipe = _get_emotion_pipeline()
     if pipe:
         try:
+            # Check for mixed sentiment first
+            mixed_result = _detect_mixed_sentiment(text, pipe)
+            if mixed_result and mixed_result.get("is_mixed"):
+                return mixed_result
+                
             raw_results = pipe(text[:512])[0]  # list of {label, score}
             emotion_scores: Dict[str, float] = {}
             for item in raw_results:
