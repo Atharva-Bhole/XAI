@@ -49,7 +49,10 @@ export default function Login() {
           </div>
 
           <div className="form-group">
-            <label htmlFor="password">Password</label>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <label htmlFor="password">Password</label>
+              <Link to="/forgot-password" style={{ fontSize: '0.85rem', color: '#2563eb' }}>Forgot Password?</Link>
+            </div>
             <input
               type="password"
               id="password"

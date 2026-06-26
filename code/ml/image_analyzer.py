@@ -351,6 +351,89 @@ def _face_expression(img_path: str) -> Dict:
         return {}
 
 
+# ---- OCR text extraction for meme/screenshot images -----------------------
+
+def _ocr_text_sentiment(img_path: str) -> Dict:
+    """Extract text from image via EasyOCR and run sentiment on it.
+
+    This catches Hindi/Marathi/English text in memes, screenshots, and
+    text-overlaid images that visual-only analysis cannot understand.
+    """
+    try:
+        import easyocr
+
+        reader = easyocr.Reader(['en', 'hi', 'mr'], gpu=False, verbose=False)
+        results = reader.readtext(img_path, detail=0, paragraph=True)
+        extracted_text = " ".join(results).strip()
+
+        if not extracted_text or len(extracted_text) < 5:
+            return {}
+
+        from ml.language_detector import detect_language
+        from ml.translator import translate_to_english
+        from ml.sentiment import analyze_text_sentiment
+
+        lang_code = detect_language(extracted_text)
+
+        if lang_code in ("hi", "mr", "hinglish"):
+            from ml.sentiment_lexicon import score_sentiment
+            import math as _math
+
+            lex_res = score_sentiment(extracted_text)
+            source_lang = lang_code if lang_code in ("hi", "mr") else "hi"
+            translated = translate_to_english(extracted_text, source_lang)
+            trans_result = analyze_text_sentiment(translated)
+
+            lex_has_signal = lex_res.pos_hits + lex_res.neg_hits > 0
+            if lex_has_signal:
+                lw, tw = 0.25, 0.75
+                total_h = lex_res.pos_hits + lex_res.neg_hits
+                lex_scores = {
+                    "positive": lex_res.pos_hits / total_h,
+                    "negative": lex_res.neg_hits / total_h,
+                    "neutral": 0.05,
+                }
+            else:
+                lw, tw = 0.0, 1.0
+                lex_scores = {"positive": 0.0, "negative": 0.0, "neutral": 1.0}
+
+            trans_scores = trans_result.get("scores", {"positive": 0.33, "negative": 0.33, "neutral": 0.34})
+            fused = {
+                "positive": lw * lex_scores["positive"] + tw * float(trans_scores.get("positive", 0.0)),
+                "negative": lw * lex_scores["negative"] + tw * float(trans_scores.get("negative", 0.0)),
+                "neutral": lw * lex_scores["neutral"] + tw * float(trans_scores.get("neutral", 0.0)),
+            }
+            sentiment_key = max(fused, key=fused.get)
+            return {
+                "method": "ocr_text",
+                "sentiment": sentiment_key.capitalize(),
+                "scores": {k: round(v, 4) for k, v in fused.items()},
+                "explanation": f"OCR extracted text ({lang_code}): \"{extracted_text[:100]}...\"" if len(extracted_text) > 100 else f"OCR extracted text ({lang_code}): \"{extracted_text}\"",
+                "extracted_text": extracted_text,
+            }
+        else:
+            if lang_code != "en":
+                analysis_text = translate_to_english(extracted_text, lang_code)
+            else:
+                analysis_text = extracted_text
+            result = analyze_text_sentiment(analysis_text)
+            scores = result.get("scores", {"positive": 0.33, "negative": 0.33, "neutral": 0.34})
+            sentiment_key = max(scores, key=scores.get)
+            return {
+                "method": "ocr_text",
+                "sentiment": sentiment_key.capitalize(),
+                "scores": {k: round(float(v), 4) for k, v in scores.items()},
+                "explanation": f"OCR extracted text: \"{extracted_text[:100]}...\"" if len(extracted_text) > 100 else f"OCR extracted text: \"{extracted_text}\"",
+                "extracted_text": extracted_text,
+            }
+    except ImportError:
+        logger.debug("easyocr not available; skipping OCR text extraction.")
+        return {}
+    except Exception as exc:
+        logger.warning("OCR text extraction failed: %s", exc)
+        return {}
+
+
 # ---- Public API -------------------------------------------------------------
 
 def analyze_image_sentiment(img_path: str) -> Dict:
@@ -368,17 +451,22 @@ def analyze_image_sentiment(img_path: str) -> Dict:
     color_result = _color_valence(img_path)
     texture_result = _texture_valence(img_path)
     vision_result = _vision_model_valence(img_path)
+    ocr_result = _ocr_text_sentiment(img_path)
 
     # Rebalanced weights: CLIP is the strongest signal, heuristics are supplementary.
+    # OCR text gets significant weight when available since it directly captures
+    # meaning in text-heavy images (memes, screenshots).
     signals = []
     if color_result:
-        signals.append(("color", color_result, 0.10))
+        signals.append(("color", color_result, 0.08))
     if texture_result:
-        signals.append(("texture", texture_result, 0.10))
+        signals.append(("texture", texture_result, 0.07))
     if face_result:
-        signals.append(("face", face_result, 0.30))
+        signals.append(("face", face_result, 0.25))
     if vision_result:
-        signals.append(("vision_model", vision_result, 0.50))
+        signals.append(("vision_model", vision_result, 0.40 if not ocr_result else 0.25))
+    if ocr_result:
+        signals.append(("ocr_text", ocr_result, 0.40))
 
     # Re-normalize weights if one of the signals is unavailable.
     weight_sum = sum(w for _n, _r, w in signals) or 1.0
@@ -431,4 +519,9 @@ def analyze_image_sentiment(img_path: str) -> Dict:
     result["emotion_scores"] = emotion_scores
     result["sentiment"] = _top_emotion_label(emotion_scores)
     result["key_words"] = []
+
+    # If OCR extracted text, add it as key words
+    if ocr_result and ocr_result.get("extracted_text"):
+        result["ocr_text"] = ocr_result["extracted_text"]
+
     return result

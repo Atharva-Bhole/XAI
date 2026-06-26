@@ -91,6 +91,7 @@ def create_app(env: str = "default") -> Flask:
         from models import user, analysis  # noqa: F401 – ensure models are registered
         db.create_all()
         _ensure_analysis_transcript_column(app)
+        _ensure_user_reset_columns(app)
 
     # Register blueprints
     app.register_blueprint(auth_bp)
@@ -134,6 +135,23 @@ def _ensure_analysis_transcript_column(app: Flask) -> None:
             app.logger.info("Added transcript column to analyses table.")
     except Exception as exc:
         app.logger.warning("Could not ensure transcript column exists: %s", exc)
+
+
+def _ensure_user_reset_columns(app: Flask) -> None:
+    """Backfill reset_token and reset_token_expiry columns for existing installs."""
+    try:
+        inspector = inspect(db.engine)
+        columns = {column["name"] for column in inspector.get_columns("users")}
+        dialect = db.engine.dialect.name.lower()
+        if dialect == "sqlite":
+            if "reset_token" not in columns:
+                db.session.execute(text("ALTER TABLE users ADD COLUMN reset_token VARCHAR(100)"))
+            if "reset_token_expiry" not in columns:
+                db.session.execute(text("ALTER TABLE users ADD COLUMN reset_token_expiry DATETIME"))
+            db.session.commit()
+            app.logger.info("Checked/added reset columns to users table.")
+    except Exception as exc:
+        app.logger.warning("Could not ensure users reset columns exist: %s", exc)
 
 
 if __name__ == "__main__":

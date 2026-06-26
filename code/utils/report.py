@@ -61,7 +61,10 @@ def generate_pdf_report(analysis, reports_folder: str) -> str:
     kv("Report ID", f"#{analysis.id}")
     kv("Generated", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"))
     kv("Input Type", (analysis.input_type or "N/A").upper())
-    kv("Detected Language", analysis.detected_language or "N/A")
+    
+    if analysis.input_type == "text":
+        kv("Detected Language", analysis.detected_language or "N/A")
+        
     pdf.ln(4)
 
     # ---- Input data ----
@@ -72,7 +75,7 @@ def generate_pdf_report(analysis, reports_folder: str) -> str:
     pdf.set_font("Helvetica", "", 10)
     pdf.multi_cell(0, 6, _latin1_safe(input_preview or "N/A"), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
-    if analysis.translated_text:
+    if analysis.input_type == "text" and analysis.translated_text:
         pdf.ln(2)
         pdf.set_font("Helvetica", "I", 9)
         pdf.set_text_color(90, 90, 90)

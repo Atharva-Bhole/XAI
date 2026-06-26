@@ -466,11 +466,80 @@ def analyze_audio_sentiment(file_path: str, is_video: bool = False) -> Dict:
 
     if transcript:
         lang_code = detect_language(transcript)
-        translated = translate_to_english(transcript, lang_code)
-        analysis = analyze_text_sentiment(translated)
-        audio_result = analysis
-        xai = generate_text_explanation(translated)
-        keywords = extract_key_words(xai)
+        if lang_code in ("hi", "mr", "hinglish"):
+            # Use dual-engine analysis for Hindi/Marathi/Hinglish transcripts
+            # (same fusion as text route: lexicon + transformer via translation)
+            from ml.sentiment_lexicon import score_sentiment
+            import math as _math
+
+            # Engine 1: Lexicon on original transcript
+            lex_res = score_sentiment(transcript)
+            lex_has_signal = lex_res.pos_hits + lex_res.neg_hits > 0
+
+            # Engine 2: Translate + Transformer
+            source_for_translation = lang_code if lang_code in ("hi", "mr") else "hi"
+            translated = translate_to_english(transcript, source_for_translation)
+            trans_analysis = analyze_text_sentiment(translated)
+            xai = generate_text_explanation(translated)
+
+            # Fusion weights
+            if lex_has_signal:
+                lw, tw = 0.30, 0.70
+            else:
+                lw, tw = 0.0, 1.0
+
+            # Build lexicon scores
+            if lex_has_signal:
+                total_hits = lex_res.pos_hits + lex_res.neg_hits
+                lex_pos = lex_res.pos_hits / total_hits
+                lex_neg = lex_res.neg_hits / total_hits
+                lex_scores = {"positive": lex_pos, "negative": lex_neg, "neutral": 0.05}
+            else:
+                lex_scores = {"positive": 0.0, "negative": 0.0, "neutral": 1.0}
+
+            trans_scores = trans_analysis.get("scores", {"positive": 0.33, "negative": 0.33, "neutral": 0.34})
+            fused_audio_scores = {
+                "positive": lw * lex_scores["positive"] + tw * float(trans_scores.get("positive", 0.0)),
+                "negative": lw * lex_scores["negative"] + tw * float(trans_scores.get("negative", 0.0)),
+                "neutral": lw * lex_scores["neutral"] + tw * float(trans_scores.get("neutral", 0.0)),
+            }
+
+            # Fuse emotions
+            trans_emo = trans_analysis.get("emotion_scores", {})
+            emotion_keys = ["happy", "sad", "angry", "calm", "fear", "surprised", "disgust"]
+            fused_emo = {}
+            for k in emotion_keys:
+                lex_emo_val = 0.0
+                if lex_has_signal:
+                    if lex_res.label == "positive" and k == "happy":
+                        lex_emo_val = lex_pos * 0.75
+                    elif lex_res.label == "negative" and k in ("sad", "angry"):
+                        lex_emo_val = lex_neg * 0.45 if k == "sad" else lex_neg * 0.30
+                fused_emo[k] = lw * lex_emo_val + tw * float(trans_emo.get(k, 0.0))
+
+            # Normalize fused emotions
+            emo_total = sum(fused_emo.values()) or 1.0
+            fused_emo = {k: v / emo_total for k, v in fused_emo.items()}
+
+            audio_result = {
+                "scores": fused_audio_scores,
+                "emotion_scores": fused_emo,
+                "sentiment": trans_analysis.get("sentiment", "Calm"),
+            }
+            keywords = extract_key_words(xai)
+
+            # Add lexicon details to XAI
+            for word, reason in lex_res.details:
+                if "positive" in reason:
+                    xai.setdefault("word_weights", []).append({"word": word, "weight": 0.5, "source": "lexicon"})
+                elif "negative" in reason:
+                    xai.setdefault("word_weights", []).append({"word": word, "weight": -0.5, "source": "lexicon"})
+        else:
+            translated = translate_to_english(transcript, lang_code)
+            analysis = analyze_text_sentiment(translated)
+            audio_result = analysis
+            xai = generate_text_explanation(translated)
+            keywords = extract_key_words(xai)
     else:
         xai = {"method": "audio_transcript", "summary": "Transcript could not be generated for this file.", "word_weights": []}
         keywords = []

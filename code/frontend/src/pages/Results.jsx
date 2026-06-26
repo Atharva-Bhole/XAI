@@ -95,13 +95,13 @@ export default function Results() {
           <SentimentBadge sentiment={data.sentiment} large />
         </div>
         <div className="result-meta">
-          {data.detected_language && (
+          {data.input_type === 'text' && data.detected_language && (
             <div className="meta-item">
               <span className="meta-key">Language Detected</span>
               <span className="meta-val">{data.detected_language}</span>
             </div>
           )}
-          {data.translated_text && (
+          {data.input_type === 'text' && data.translated_text && (
             <div className="meta-item">
               <span className="meta-key">Translated Text</span>
               <span className="meta-val meta-translated">{data.translated_text}</span>

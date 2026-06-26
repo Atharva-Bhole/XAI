@@ -1,5 +1,8 @@
 import json
 import os
+import re
+import math
+import string
 import logging
 from flask import Blueprint, request, jsonify, session, current_app
 from werkzeug.utils import secure_filename
@@ -113,6 +116,226 @@ def _aggregate_post_analyses(post_analyses: list) -> dict:
     return {"sentiment": sentiment, "scores": avg, "emotion_scores": emo_avg}
 
 
+def _analyze_native_text(text: str, lang_code: str = "hi") -> dict:
+    """Dual-engine sentiment analysis for Hindi/Marathi/Hinglish text.
+
+    Engine 1 (Lexicon): Fast word-match on original text — catches slang,
+    code-mixed words, and romanized sentiment the translator may garble.
+
+    Engine 2 (Transformer): Translates to English via Google Translate, then
+    runs the full transformer emotion pipeline for nuanced 7-emotion scoring.
+
+    Fusion: Weighted average — transformer 70%, lexicon 30%.  If the lexicon
+    found zero sentiment hits, transformer gets 100%.
+    """
+    import math
+    from ml.sentiment_lexicon import score_sentiment
+
+    # ---- Engine 1: Lexicon on original text ----
+    sentiment_res = score_sentiment(text)
+    lexicon_has_signal = sentiment_res.pos_hits + sentiment_res.neg_hits > 0
+
+    # Build lexicon emotion scores (granular, not binary)
+    if lexicon_has_signal:
+        total_hits = sentiment_res.pos_hits + sentiment_res.neg_hits
+        pos_ratio = sentiment_res.pos_hits / total_hits
+        neg_ratio = sentiment_res.neg_hits / total_hits
+        lex_scores = {"positive": pos_ratio, "negative": neg_ratio, "neutral": 0.05}
+
+        # Map to emotions based on lexicon polarity and specific keyword discrimination
+        if sentiment_res.label == "positive":
+            lex_emotions = {
+                "happy": pos_ratio * 0.75, "sad": neg_ratio * 0.30,
+                "angry": neg_ratio * 0.20, "calm": 0.10,
+                "fear": neg_ratio * 0.05, "surprised": pos_ratio * 0.15,
+                "disgust": neg_ratio * 0.05,
+            }
+        elif sentiment_res.label == "negative":
+            text_l = text.lower()
+            violence_cues = ["mara", "mari", "maramari", "marhan", "maarpeet", "rakta", "rakt", "bleeding", "blood", "jakham", "jakhmi", "khun", "khoon", "murder", "qatl", "katl", "hatya", "chaku", "talwar", "goli", "firing", "bomb", "accident", "apghat", "suicide", "dead", "mele", "mela", "lash", "dhishum", "petla"]
+            anger_cues = ["doka", "doke", "dokya", "dimag", "dimaag", "satak", "firla", "firli", "kharab", "bakwas", "bakwaas", "ghatiya", "wahiyat", "bekar", "kamina", "harami", "chutiya", "gadha", "ullu", "jhagda", "ladai", "maar", "hinsa", "zulm", "atyachar", "dhokha", "vaitaag", "vatag", "traas", "tras", "chirchir", "rage", "annoy", "irritat", "hate", "kantala", "bore", "boring", "barbaad", "waste", "yedzava", "yeda", "pagal", "chidan", "rag", "gussa", "vaiteen", "chirden", "mood", "gaand", "lavda", "bocha", "madarchod", "behenchod", "benchod", "bhosdike", "mc", "bc"]
+            sad_cues = ["rona", "roi", "roye", "rula", "dukhi", "dukh", "sad", "akela", "depress", "tanha", "vyatha", "peeda", "kasht", "afsos", "pachtava", "musibat", "pareshani", "haar", "apyash", "mayus", "radlo", "radla"]
+            fear_cues = ["dar", "darr", "bhaya", "bhiti", "ghabar", "anxi", "stress", "tanav", "tanaav", "bhayanak", "ghabarlo", "dhamki", "threat"]
+
+            is_violence = any(w in text_l for w in violence_cues)
+            is_angry = any(w in text_l for w in anger_cues)
+            is_sad = any(w in text_l for w in sad_cues)
+            is_fear = any(w in text_l for w in fear_cues)
+
+            if is_violence:
+                lex_emotions = {
+                    "happy": pos_ratio * 0.02, "sad": neg_ratio * 0.20, "angry": neg_ratio * 0.48,
+                    "calm": 0.02, "fear": neg_ratio * 0.35, "surprised": 0.05,
+                    "disgust": neg_ratio * 0.10,
+                }
+            elif is_angry and not is_sad:
+                lex_emotions = {
+                    "happy": pos_ratio * 0.05, "sad": neg_ratio * 0.15, "angry": neg_ratio * 0.60,
+                    "calm": 0.03, "fear": neg_ratio * 0.05, "surprised": 0.02,
+                    "disgust": neg_ratio * 0.15,
+                }
+            elif is_sad and not is_angry:
+                lex_emotions = {
+                    "happy": pos_ratio * 0.05, "sad": neg_ratio * 0.60, "angry": neg_ratio * 0.10,
+                    "calm": 0.03, "fear": neg_ratio * 0.15, "surprised": 0.02,
+                    "disgust": neg_ratio * 0.05,
+                }
+            elif is_fear:
+                lex_emotions = {
+                    "happy": pos_ratio * 0.05, "sad": neg_ratio * 0.20, "angry": neg_ratio * 0.10,
+                    "calm": 0.03, "fear": neg_ratio * 0.60, "surprised": 0.02,
+                    "disgust": neg_ratio * 0.05,
+                }
+            else:
+                lex_emotions = {
+                    "happy": pos_ratio * 0.10, "sad": neg_ratio * 0.35, "angry": neg_ratio * 0.35,
+                    "calm": 0.05, "fear": neg_ratio * 0.10, "surprised": 0.02,
+                    "disgust": neg_ratio * 0.13,
+                }
+        else:
+            lex_emotions = {
+                "happy": 0.10, "sad": 0.10, "angry": 0.05, "calm": 0.55,
+                "fear": 0.03, "surprised": 0.05, "disgust": 0.02,
+            }
+        # Normalize
+        lex_emo_total = sum(lex_emotions.values()) or 1.0
+        lex_emotions = {k: v / lex_emo_total for k, v in lex_emotions.items()}
+    else:
+        lex_scores = {"positive": 0.0, "negative": 0.0, "neutral": 1.0}
+        lex_emotions = {
+            "happy": 0.0, "sad": 0.0, "angry": 0.0, "calm": 1.0,
+            "fear": 0.0, "surprised": 0.0, "disgust": 0.0,
+        }
+
+    # ---- Engine 2: Translate + Transformer ----
+    # Always translate, even for hi/mr, to feed the English transformer
+    source_for_translation = lang_code if lang_code in ("hi", "mr") else "hi"
+    translated = translate_to_english(text, source_for_translation)
+    transformer_result = analyze_text_sentiment(translated)
+    transformer_xai = generate_text_explanation(translated)
+
+    trans_scores = transformer_result.get("scores", {"positive": 0.33, "negative": 0.33, "neutral": 0.34})
+    trans_emotions = transformer_result.get("emotion_scores", {
+        "happy": 0.0, "sad": 0.0, "angry": 0.0, "calm": 1.0,
+        "fear": 0.0, "surprised": 0.0, "disgust": 0.0,
+    })
+
+    # ---- Fusion ----
+    # Check if Google Translate actually converted the Indic text or returned the original romanized string
+    clean_orig = re.sub(r'\s+', ' ', text.lower()).strip()
+    clean_trans = re.sub(r'\s+', ' ', (translated or "").lower()).strip()
+    translation_unchanged = (not clean_trans or clean_trans == clean_orig)
+
+    if lexicon_has_signal:
+        if translation_unchanged:
+            # Translation returned original romanized string -> English transformer is blind. Trust native lexicon 100%!
+            lw, tw = 1.0, 0.0
+        else:
+            # Translation worked -> weight native lexicon 75%, transformer 25% (native slang is ground truth)
+            lw, tw = 0.75, 0.25
+    else:
+        lw, tw = 0.0, 1.0
+
+    # Fuse polarity scores
+    fused_scores = {
+        "positive": lw * lex_scores["positive"] + tw * float(trans_scores.get("positive", 0.0)),
+        "negative": lw * lex_scores["negative"] + tw * float(trans_scores.get("negative", 0.0)),
+        "neutral": lw * lex_scores["neutral"] + tw * float(trans_scores.get("neutral", 0.0)),
+    }
+
+    # Fuse emotion scores
+    emotion_keys = ["happy", "sad", "angry", "calm", "fear", "surprised", "disgust"]
+    fused_emotions = {}
+    for k in emotion_keys:
+        fused_emotions[k] = lw * lex_emotions.get(k, 0.0) + tw * float(trans_emotions.get(k, 0.0))
+
+    # Power sharpening on fused probabilities to accentuate dominant emotion without e^0 floor noise
+    _POW = 2.5
+    pow_emo = {k: math.pow(max(0.0, v), _POW) for k, v in fused_emotions.items()}
+    pow_emo_total = sum(pow_emo.values()) or 1.0
+    fused_emotions = {k: round(v / pow_emo_total, 4) for k, v in pow_emo.items()}
+
+    # Sharpen polarity scores too
+    pow_pol = {k: math.pow(max(0.0, v), _POW) for k, v in fused_scores.items()}
+    pow_pol_total = sum(pow_pol.values()) or 1.0
+    fused_scores = {k: round(v / pow_pol_total, 4) for k, v in pow_pol.items()}
+
+    # Determine final sentiment from dominant emotion
+    dominant_emotion = max(fused_emotions, key=fused_emotions.get)
+    sentiment_label = {
+        "happy": "Happy", "sad": "Sad", "angry": "Angry", "calm": "Calm",
+        "fear": "Fear", "surprised": "Surprised", "disgust": "Disgust",
+    }.get(dominant_emotion, "Calm")
+
+    result = {
+        "sentiment": sentiment_label,
+        "emotion_scores": fused_emotions,
+        "scores": fused_scores,
+    }
+
+    # ---- XAI: Merge word weights from both engines ----
+    lexicon_weights = []
+    for word, reason in sentiment_res.details:
+        if "positive" in reason:
+            lexicon_weights.append({"word": word, "weight": 0.5, "source": "lexicon"})
+        elif "negative" in reason:
+            lexicon_weights.append({"word": word, "weight": -0.5, "source": "lexicon"})
+        elif "intensifier" in reason:
+            lexicon_weights.append({"word": word, "weight": 0.2, "source": "lexicon"})
+
+    transformer_weights = transformer_xai.get("word_weights", [])
+    if isinstance(transformer_weights, list):
+        for item in transformer_weights:
+            if isinstance(item, dict):
+                item["source"] = "transformer"
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                transformer_weights[transformer_weights.index(item)] = {
+                    "word": item[0], "weight": item[1], "source": "transformer"
+                }
+
+    # Combine and deduplicate (keep higher abs weight)
+    all_weights = lexicon_weights + (transformer_weights if isinstance(transformer_weights, list) else [])
+    seen = {}
+    for w in all_weights:
+        word = w.get("word", "") if isinstance(w, dict) else ""
+        weight = w.get("weight", 0.0) if isinstance(w, dict) else 0.0
+        if word and (word not in seen or abs(weight) > abs(seen[word].get("weight", 0.0))):
+            seen[word] = w
+    merged_weights = sorted(seen.values(), key=lambda x: abs(x.get("weight", 0.0)), reverse=True)[:15]
+
+    # Build summary
+    parts = []
+    if lexicon_has_signal:
+        pos_words = [w["word"] for w in lexicon_weights if w.get("weight", 0) > 0]
+        neg_words = [w["word"] for w in lexicon_weights if w.get("weight", 0) < 0]
+        if pos_words:
+            parts.append(f"Lexicon positive: {', '.join(pos_words[:5])}")
+        if neg_words:
+            parts.append(f"Lexicon negative: {', '.join(neg_words[:5])}")
+
+    trans_summary = transformer_xai.get("summary", "")
+    if trans_summary:
+        parts.append(f"Transformer: {trans_summary}")
+
+    summary = " | ".join(parts) if parts else "Dual-engine analysis completed."
+
+    xai = {
+        "method": "dual_engine",
+        "summary": summary,
+        "word_weights": merged_weights,
+        "emotion_scores": fused_emotions,
+        "engine_details": {
+            "lexicon_label": sentiment_res.label,
+            "lexicon_has_signal": lexicon_has_signal,
+            "lexicon_weight": lw,
+            "transformer_weight": tw,
+            "translated_text": translated,
+        },
+    }
+    result["key_words"] = [w.get("word", "") for w in merged_weights if isinstance(w, dict)][:10]
+    return {"translated": translated, "result": result, "xai": xai}
+
+
 # ---- Text analysis ---------------------------------------------------------
 
 @analysis_bp.route("/text", methods=["POST"])
@@ -126,14 +349,21 @@ def analyze_text():
         return jsonify({"error": "Text too long (max 10 000 characters)."}), 400
 
     lang_code = detect_language(text)
-    translated = translate_to_english(text, lang_code)
-    result = analyze_text_sentiment(translated)
-    xai = generate_text_explanation(translated)
-    xai["emotion_scores"] = result.get("emotion_scores", {})
-    result["key_words"] = extract_key_words(xai)
+    
+    if lang_code in ("hi", "mr", "hinglish"):
+        native_res = _analyze_native_text(text, lang_code)
+        translated = native_res["translated"]
+        result = native_res["result"]
+        xai = native_res["xai"]
+    else:
+        translated = translate_to_english(text, lang_code)
+        result = analyze_text_sentiment(translated)
+        xai = generate_text_explanation(translated)
+        xai["emotion_scores"] = result.get("emotion_scores", {})
+        result["key_words"] = extract_key_words(xai)
 
     rec = _persist_analysis(
-        session["user_id"], "text", text, lang_code, translated if lang_code != "en" else "", result, xai
+        session["user_id"], "text", text, lang_code, translated if lang_code not in ("en",) else "", result, xai
     )
     response = rec.to_dict()
     response["emotion_scores"] = result.get("emotion_scores", {})
@@ -230,13 +460,19 @@ def analyze_url():
         post_text = str(post.get("text", "")).strip()
         if post_text:
             post_lang = detect_language(post_text)
-            post_translated = translate_to_english(post_text, post_lang)
-            post_result = analyze_text_sentiment(post_translated)
+            if post_lang in ("hi", "mr", "hinglish"):
+                native_res = _analyze_native_text(post_text, post_lang)
+                post_translated = native_res["translated"]
+                post_result = native_res["result"]
+            else:
+                post_translated = translate_to_english(post_text, post_lang)
+                post_result = analyze_text_sentiment(post_translated)
+                
             post_analyses.append({
                 "id": post.get("id", ""),
                 "text": post_text,
                 "detected_language": language_display_name(post_lang),
-                "translated_text": post_translated if post_lang != "en" else "",
+                "translated_text": post_translated if post_lang not in ("en",) else "",
                 "sentiment": post_result.get("sentiment", "Calm"),
                 "emotion_scores": post_result.get("emotion_scores", {}),
                 "scores": post_result.get("scores", {"positive": 0.0, "negative": 0.0, "neutral": 1.0}),
@@ -277,8 +513,13 @@ def analyze_url():
     combined_text = combined_text[:8000]
 
     lang_code = detect_language(text) if text else "en"
-    translated = translate_to_english(text, lang_code) if text else ""
-    xai = generate_text_explanation(combined_text) if combined_text else {}
+    if text and lang_code in ("hi", "mr", "hinglish"):
+        native_res = _analyze_native_text(text, lang_code)
+        translated = native_res["translated"]
+        xai = native_res["xai"]
+    else:
+        translated = translate_to_english(text, lang_code) if text else ""
+        xai = generate_text_explanation(combined_text) if combined_text else {}
     if not xai and media_xai:
         xai = media_xai
 
@@ -292,7 +533,7 @@ def analyze_url():
     xai["emotion_scores"] = result.get("emotion_scores", {})
 
     rec = _persist_analysis(
-        session["user_id"], "url", url, lang_code, translated if lang_code != "en" else "", result, xai
+        session["user_id"], "url", url, lang_code, translated if lang_code not in ("en",) else "", result, xai
     )
     response = rec.to_dict()
     response["source"] = fetched.get("source", "web_scrape")

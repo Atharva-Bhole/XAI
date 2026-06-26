@@ -230,6 +230,22 @@ def _detect_mixed_sentiment(text: str, pipe) -> Dict:
     return result
 
 
+def _preprocess_text(text: str) -> str:
+    """Clean translation artifacts and normalize text for better model accuracy."""
+    import re
+    if not text:
+        return text
+    # Fix common translation artifacts
+    text = text.replace('\u201c', '"').replace('\u201d', '"')
+    text = text.replace('\u2018', "'").replace('\u2019', "'")
+    text = text.replace('\u2014', ' - ').replace('\u2013', ' - ')
+    # Collapse multiple spaces
+    text = re.sub(r'\s+', ' ', text).strip()
+    # Remove stray Unicode characters that sometimes appear in translation output
+    text = re.sub(r'[\u200b\u200c\u200d\ufeff]', '', text)
+    return text
+
+
 def analyze_text_sentiment(text: str) -> Dict:
     """
     Returns an emotion-first dict:
@@ -243,6 +259,9 @@ def analyze_text_sentiment(text: str) -> Dict:
     """
     if not text or not text.strip():
         return _result_from_emotions({"calm": 1.0})
+
+    # Pre-process text (clean translation artifacts, etc.)
+    text = _preprocess_text(text)
 
     pipe = _get_emotion_pipeline()
     if pipe:
@@ -285,11 +304,27 @@ _POS_WORDS = {
     "good", "great", "excellent", "amazing", "wonderful", "fantastic", "love",
     "best", "happy", "joy", "awesome", "brilliant", "superb", "nice", "beautiful",
     "delightful", "perfect", "outstanding", "positive", "pleasant",
+    # Words that survive Hinglish/Marathi translation intact
+    "fun", "cool", "solid", "fire", "lit", "epic", "legendary", "iconic",
+    "enjoyed", "recommend", "impressive", "incredible", "marvelous", "splendid",
+    "terrific", "magnificent", "glorious", "lovely", "cute", "sweet", "blessed",
+    "grateful", "thankful", "proud", "excited", "thrilled", "overjoyed",
+    "fabulous", "phenomenal", "spectacular", "exceptional", "extraordinary",
+    "bravo", "congratulations", "cheers", "celebrate", "victory", "success",
+    "triumph", "achievement", "masterpiece", "gem", "treasure",
 }
 _NEG_WORDS = {
     "bad", "terrible", "awful", "horrible", "hate", "worst", "ugly", "poor",
     "disgusting", "dreadful", "pathetic", "negative", "nasty", "sad", "angry",
     "disappointed", "frustrating", "useless", "broken", "failure",
+    # Words that survive Hinglish/Marathi translation intact
+    "boring", "waste", "rubbish", "nonsense", "trash", "garbage", "hopeless",
+    "annoying", "irritating", "painful", "miserable", "depressing", "disaster",
+    "catastrophe", "nightmare", "mess", "chaos", "worthless", "meaningless",
+    "unbearable", "intolerable", "unacceptable", "regret", "suffer", "suffering",
+    "victim", "abuse", "violence", "cruel", "brutal", "harsh", "toxic",
+    "disgusted", "horrified", "appalled", "outraged", "furious", "enraged",
+    "heartbroken", "devastated", "shattered", "crushed", "defeated", "ruined",
 }
 
 
