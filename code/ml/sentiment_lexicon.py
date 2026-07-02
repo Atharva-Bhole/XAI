@@ -221,6 +221,19 @@ NEGATIVE_WORDS = {
     # ---- Cheating, Betrayal, Corruption ----
     "lutla", "lutli", "lootle", "fasaav", "fasavla", "fasavli", "fasvnuk", "chori", "robbery", "bhrashtachar",
     "scam", "ghotala", "jhol", "fraud", "nakli", "fake", "jhut", "jhutha", "khota", "khoti", "khote", "laach", "rishwat",
+    # ---- Tech / Product complaints ----
+    "weak", "kamzor", "kamjoor", "kamjor", "slow", "lag", "laggy", "hang", "hanging", "hangs",
+    "heating", "overheat", "overheating", "draining", "drain",
+    "expensive", "mehnga", "mehanga", "mehenge", "costly",
+    "faulty", "defective", "defect", "broken", "crack", "cracked",
+    "pathetic", "useless", "trash", "garbage", "rubbish", "crap",
+    "overpriced", "overrated", "underwhelming", "disappointing", "disappointed",
+    "uncomfortable", "unreliable", "unresponsive",
+    "glitch", "glitchy", "buggy", "error", "crash", "crashes", "crashing",
+    "flimsy", "cheap", "chinsy", "fragile",
+    "noisy", "noise", "loud",
+    "poor", "inferior", "mediocre", "substandard", "subpar",
+    "complaint", "regret", "refund", "return", "returned",
 }
 
 # ---------------------------------------------------------------------------
@@ -274,7 +287,7 @@ INTENSIFIER_WORDS = {
 # The clause after the contrast word is weighted 1.3× since it often
 # carries the speaker's true/dominant sentiment.
 # ---------------------------------------------------------------------------
-CONTRAST_WEIGHT = 1.3
+CONTRAST_WEIGHT = 1.5
 
 CONTRAST_WORDS = {
     "par", "lekin", "magar", "parantu", "kintu",

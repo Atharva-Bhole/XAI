@@ -85,6 +85,8 @@ def create_app(env: str = "default") -> Flask:
     # Database setup
     app.config["SQLALCHEMY_DATABASE_URI"] = app.config["DATABASE_URL"]
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+    app.json.ensure_ascii = False
+
     db.init_app(app)
 
     with app.app_context():

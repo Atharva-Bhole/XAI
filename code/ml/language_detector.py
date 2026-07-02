@@ -49,17 +49,17 @@ SHARED_WORDS = {
     "ho", "hoy", "hoye",
     "aaj", "kal", "abhi", "ata", "aata",  # "kal" = yesterday/tomorrow in both
     "kay", "kya",  # both languages use kay/kya forms for "what" colloquially in border dialects
-    "tu", "mi", "to", "the", "main", "mat", "pan", # extremely short, high false-positive risk with English
+    "tu",  # shared pronoun
     "pn", "par", "pr",  # "but" -- spelled almost identically, both languages
     "ani", "aani", "aur",  # technically distinct (ani=mr, aur=hi) but frequently cross-used in code-mixed text near the border; keep distinctive spellings below instead
-    "bhai", "yaar", "boss", "scene", "set",  # Bollywood-influenced slang used identically in both
+    "bhai", "yaar", "boss",  # Bollywood-influenced slang used identically in both
     "thoda", "thodi", "thode",  # "a little" -- identical spelling/meaning in both
     "sahi", "karte", "jate", "hota", "hoti", "hote",  # shared verb-form spellings
     "tujhe",  # Hindi dative "to you" vs Marathi informal possessive -- same spelling
     # Additional shared sentiment/slang words
     "mast", "badhiya", "badiya", "accha", "achha", "acha",
     "kharab", "bakwas", "bakwaas", "bekar", "bekaar",
-    "dost", "bro", "dude",
+    "dost",
 }
 
 # ---------------------------------------------------------------------------
@@ -249,9 +249,10 @@ def detect_language(text: str) -> str:
     # Romanized (Hinglish/Marlish) detection.
     # Only trust distinctive hits; shared_hits alone never decides the
     # language, it just confirms "this is Hindi-or-Marathi-ish text".
+    distinctive_hits = marathi_hits + hindi_hits
 
     # Detect code-mixed "Hinglish" -- both Indic and English content words present
-    if indic_signal >= 1 and english_hits >= 1:
+    if distinctive_hits >= 1 and english_hits >= 1:
         # This is code-mixed text. Determine the Indic base language.
         if marathi_hits > hindi_hits and marathi_hits >= 2:
             return "mr"  # Marathi-English code-mix, treat as Marathi
@@ -260,8 +261,7 @@ def detect_language(text: str) -> str:
         if marathi_hits >= 2 and hindi_hits >= 2:
             # Genuine tie -- default to hinglish
             return "hinglish"
-        # Some Indic signal + English = Hinglish (default to Hindi-base)
-        if indic_signal >= 2:
+        if distinctive_hits >= 1 and indic_signal >= 2:
             return "hinglish"
 
     if marathi_hits > hindi_hits and marathi_hits >= 2:
@@ -276,7 +276,7 @@ def detect_language(text: str) -> str:
         pass
 
     # Check if shared words alone suggest Indic language
-    if shared_hits >= 3 and english_hits >= 1:
+    if shared_hits >= 3 and english_hits >= 1 and distinctive_hits >= 1:
         return "hinglish"
 
     # Fall back to langdetect

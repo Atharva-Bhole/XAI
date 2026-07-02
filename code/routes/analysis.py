@@ -193,10 +193,26 @@ def _analyze_native_text(text: str, lang_code: str = "hi") -> dict:
                     "disgust": neg_ratio * 0.13,
                 }
         else:
-            lex_emotions = {
-                "happy": 0.10, "sad": 0.10, "angry": 0.05, "calm": 0.55,
-                "fear": 0.03, "surprised": 0.05, "disgust": 0.02,
-            }
+            text_l = text.lower()
+            complaint_cues = ["weak", "kamzor", "kamjor", "kamjoor", "slow", "lag", "laggy",
+                              "hang", "hanging", "heating", "overheat", "draining", "drain",
+                              "expensive", "mehnga", "mehanga", "costly", "faulty", "defective",
+                              "broken", "crack", "pathetic", "useless", "trash", "garbage",
+                              "rubbish", "crap", "overpriced", "overrated", "disappointing",
+                              "disappointed", "underwhelming", "unreliable", "glitch", "buggy",
+                              "crash", "flimsy", "cheap", "poor", "inferior", "mediocre",
+                              "substandard", "complaint", "regret", "refund"]
+            is_complaint = any(w in text_l for w in complaint_cues)
+            if is_complaint:
+                lex_emotions = {
+                    "happy": 0.05, "sad": 0.40, "angry": 0.15, "calm": 0.15,
+                    "fear": 0.03, "surprised": 0.05, "disgust": 0.17,
+                }
+            else:
+                lex_emotions = {
+                    "happy": 0.10, "sad": 0.10, "angry": 0.05, "calm": 0.55,
+                    "fear": 0.03, "surprised": 0.05, "disgust": 0.02,
+                }
         # Normalize
         lex_emo_total = sum(lex_emotions.values()) or 1.0
         lex_emotions = {k: v / lex_emo_total for k, v in lex_emotions.items()}
@@ -554,14 +570,13 @@ def download_report(analysis_id: int):
     if not rec:
         return jsonify({"error": "Analysis not found."}), 404
 
-    if not rec.report_path or not os.path.exists(rec.report_path):
-        try:
-            path = generate_pdf_report(rec, current_app.config["REPORTS_FOLDER"])
-            rec.report_path = path
-            db.session.commit()
-        except Exception as exc:
-            logger.error("PDF generation failed: %s", exc)
-            return jsonify({"error": "Could not generate report."}), 500
+    try:
+        path = generate_pdf_report(rec, current_app.config["REPORTS_FOLDER"])
+        rec.report_path = path
+        db.session.commit()
+    except Exception as exc:
+        logger.error("PDF generation failed: %s", exc)
+        return jsonify({"error": "Could not generate report."}), 500
 
     from flask import send_file
     return send_file(rec.report_path, as_attachment=True, download_name=f"xsense_report_{analysis_id}.pdf")
